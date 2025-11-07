@@ -8,6 +8,21 @@ import tiktoken
 # MCP response token limit is 25,000 - we'll use 20,000 to be safe
 MAX_RESPONSE_TOKENS = 20000
 
+# Default PR template
+DEFAULT_PR_TEMPLATE = """## Summary
+[Brief description of what this PR does and why]
+
+## Changes
+-
+-
+
+## Testing
+[How to test these changes]
+
+## Related Issues
+[Links to related issues, if any]
+"""
+
 
 def count_tokens(text: str) -> int:
     """Count tokens in text using tiktoken (cl100k_base encoding).
@@ -225,3 +240,237 @@ def execute_commit(repo_path: str, message: str) -> str:
     commit_hash = hash_result.stdout.strip()[:7]
 
     return f"Successfully committed as {commit_hash}\n{result.stdout}"
+
+
+def get_current_branch(repo_path: str) -> str:
+    """Get the current git branch name.
+
+    Args:
+        repo_path: Path to the git repository
+
+    Returns:
+        Current branch name
+
+    Raises:
+        subprocess.CalledProcessError: If git command fails
+    """
+    result = subprocess.run(
+        ['git', 'rev-parse', '--abbrev-ref', 'HEAD'],
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+        check=True
+    )
+    return result.stdout.strip()
+
+
+def get_branch_diff(repo_path: str, base_branch: str, head_branch: Optional[str] = None) -> str:
+    """Get diff between two branches.
+
+    Args:
+        repo_path: Path to the git repository
+        base_branch: Base branch (e.g., "main", "dev")
+        head_branch: Head branch (defaults to current branch)
+
+    Returns:
+        Raw git diff output
+
+    Raises:
+        subprocess.CalledProcessError: If git command fails
+    """
+    if head_branch is None:
+        head_branch = get_current_branch(repo_path)
+
+    # Use three-dot diff to compare from common ancestor
+    result = subprocess.run(
+        ['git', 'diff', f'{base_branch}...{head_branch}'],
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+        check=True
+    )
+    return result.stdout
+
+
+def get_branch_commits(repo_path: str, base_branch: str, head_branch: Optional[str] = None) -> list[dict]:
+    """Get list of commits in head branch not in base branch.
+
+    Args:
+        repo_path: Path to the git repository
+        base_branch: Base branch (e.g., "main", "dev")
+        head_branch: Head branch (defaults to current branch)
+
+    Returns:
+        List of commit dicts with 'hash' and 'message'
+
+    Raises:
+        subprocess.CalledProcessError: If git command fails
+    """
+    if head_branch is None:
+        head_branch = get_current_branch(repo_path)
+
+    # Get commits in head but not in base
+    result = subprocess.run(
+        ['git', 'log', f'{base_branch}..{head_branch}', '--oneline'],
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+        check=True
+    )
+
+    commits = []
+    for line in result.stdout.strip().split('\n'):
+        if line:
+            parts = line.split(' ', 1)
+            commits.append({
+                'hash': parts[0],
+                'message': parts[1] if len(parts) > 1 else ''
+            })
+
+    return commits
+
+
+def get_branch_file_stats(repo_path: str, base_branch: str, head_branch: Optional[str] = None) -> dict:
+    """Get file statistics for changes between branches.
+
+    Args:
+        repo_path: Path to the git repository
+        base_branch: Base branch (e.g., "main", "dev")
+        head_branch: Head branch (defaults to current branch)
+
+    Returns:
+        Dict with file changes
+
+    Raises:
+        subprocess.CalledProcessError: If git command fails
+    """
+    if head_branch is None:
+        head_branch = get_current_branch(repo_path)
+
+    # Get list of changed files with status
+    result = subprocess.run(
+        ['git', 'diff', '--name-status', f'{base_branch}...{head_branch}'],
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+        check=True
+    )
+
+    files = []
+    for line in result.stdout.strip().split('\n'):
+        if not line:
+            continue
+
+        parts = line.split('\t', 1)
+        if len(parts) < 2:
+            continue
+
+        status_char = parts[0]
+        filepath = parts[1]
+
+        file_status = 'modified'
+        if status_char == 'A':
+            file_status = 'added'
+        elif status_char == 'D':
+            file_status = 'deleted'
+        elif status_char == 'M':
+            file_status = 'modified'
+        elif status_char.startswith('R'):
+            file_status = 'renamed'
+
+        files.append({
+            'path': filepath,
+            'status': file_status
+        })
+
+    return {'files': files}
+
+
+def detect_git_platform(repo_path: str) -> str:
+    """Detect git platform from remote URL.
+
+    Args:
+        repo_path: Path to the git repository
+
+    Returns:
+        Platform name: 'github', 'gitlab', 'bitbucket', or 'unknown'
+
+    Raises:
+        subprocess.CalledProcessError: If git command fails
+    """
+    try:
+        result = subprocess.run(
+            ['git', 'remote', 'get-url', 'origin'],
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        remote_url = result.stdout.strip().lower()
+
+        if 'github.com' in remote_url:
+            return 'github'
+        elif 'gitlab.com' in remote_url or 'gitlab' in remote_url:
+            return 'gitlab'
+        elif 'bitbucket.org' in remote_url:
+            return 'bitbucket'
+        else:
+            return 'unknown'
+    except subprocess.CalledProcessError:
+        return 'unknown'
+
+
+def execute_pr_creation(
+    repo_path: str,
+    title: str,
+    body: str,
+    base_branch: str,
+    head_branch: Optional[str] = None,
+    draft: bool = False
+) -> str:
+    """Create a pull request using platform CLI.
+
+    Args:
+        repo_path: Path to the git repository
+        title: PR title
+        body: PR description
+        base_branch: Base branch (e.g., "main", "dev")
+        head_branch: Head branch (defaults to current branch)
+        draft: Create as draft PR
+
+    Returns:
+        Success message with PR URL
+
+    Raises:
+        subprocess.CalledProcessError: If command fails
+        ValueError: If platform not supported or CLI not available
+    """
+    if head_branch is None:
+        head_branch = get_current_branch(repo_path)
+
+    platform = detect_git_platform(repo_path)
+
+    if platform == 'github':
+        # Use GitHub CLI
+        cmd = ['gh', 'pr', 'create', '--base', base_branch, '--head', head_branch, '--title', title, '--body', body]
+        if draft:
+            cmd.append('--draft')
+
+    elif platform == 'gitlab':
+        # Use GitLab CLI
+        cmd = ['glab', 'mr', 'create', '--target-branch', base_branch, '--source-branch', head_branch, '--title', title, '--description', body]
+        if draft:
+            cmd.append('--draft')
+
+    else:
+        raise ValueError(f"Platform '{platform}' not supported or CLI not configured. Supported: github (gh), gitlab (glab)")
+
+    result = subprocess.run(
+        cmd,
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+        check=True
+    )
+
+    return result.stdout
