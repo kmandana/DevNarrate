@@ -3,11 +3,12 @@ The AI that narrates your code changes, from commits to deployments.
 
 ## Features
 
-- **Smart Commit Messages**: Generate conventional commit messages from staged or unstaged changes
+- **Smart Commit Messages**: Generate conventional commit messages from staged changes with full user control
 - **PR Descriptions**: Create detailed pull request descriptions with customizable templates
 - **Multi-Platform**: Supports GitHub and GitLab
 - **Token-Aware**: Handles large diffs with automatic pagination
 - **Template System**: Use custom PR templates or built-in defaults
+- **Safety First**: Only works with staged changes to prevent accidental commits
 
 ## Setup
 
@@ -39,17 +40,23 @@ claude mcp list
 
 ### Commit Messages
 
-For staged changes:
-```
-Ask Claude: "Generate a commit message for my staged changes"
+**Important:** DevNarrate only works with **staged changes** to ensure you have full control over what gets committed. This prevents accidental commits of unintended files.
+
+1. First, stage the files you want to commit:
+```bash
+git add <file1> <file2>
+# or for all tracked files with changes:
+git add -u
 ```
 
-For all changes (staged + unstaged):
+2. Ask Claude to generate the commit message:
 ```
-Ask Claude: "Generate a commit message for all my changes"
+Ask Claude: "Generate a commit message for my changes"
 ```
 
-Claude will show you the proposed commit message and ask for approval before committing.
+3. Claude will analyze your staged changes, show you the proposed commit message, and ask for approval before committing.
+
+If you haven't staged any changes, Claude will prompt you to stage them first.
 
 ### PR Descriptions
 
