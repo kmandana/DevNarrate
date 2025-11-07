@@ -23,7 +23,6 @@ mcp = FastMCP("devnarrate")
 
 @mcp.tool()
 async def get_commit_context(
-    include_unstaged: bool = False,
     cursor: Optional[str] = None,
     max_diff_tokens: int = 20000,
     repo_path: Optional[str] = None
@@ -33,22 +32,36 @@ async def get_commit_context(
     IMPORTANT: You MUST call this tool FIRST before generating any commit message.
     Never write a commit message without first seeing the actual git diff from this tool.
 
+    This tool ONLY shows STAGED changes. We intentionally do not support unstaged changes
+    to ensure users have explicit control over what gets committed and prevent accidental commits.
+
+    CRITICAL: If the diff is empty and there are no files:
+    1. STOP immediately - do NOT proceed with generating a commit message
+    2. Tell the user: "No staged changes found. Please stage the files you want to commit first using: git add <file1> <file2>"
+    3. DO NOT attempt to stage files automatically
+    4. Wait for the user to stage their changes
+
     Returns file changes and diff output with TOKEN-BASED pagination (MCP limit: 25k tokens).
     Large diffs are automatically paginated to stay under the token limit.
 
-    After receiving the diff, analyze it and generate a commit message following:
+    After receiving a non-empty diff, analyze it and generate a commit message following:
     - 50/72 rule: 50 char subject line, 72 char body lines
     - Conventional commits format: type(scope): description
     - DO NOT include AI signatures, attribution, or "Generated with" footers
 
     Args:
-        include_unstaged: Include unstaged changes (default: False, staged only)
         cursor: Pagination cursor for large diffs (optional, returned as next_cursor)
         max_diff_tokens: Maximum tokens per response (default: 20000, safe under 25k limit)
         repo_path: Path to git repository (optional, defaults to Claude's working directory)
 
     Returns:
-        JSON string with files, stats, diff chunk, token counts, and pagination info
+        JSON string with:
+        - has_changes: boolean - True if there are any staged changes to commit
+        - files: list of changed files with status
+        - diff: the diff chunk (paginated)
+        - next_cursor: pagination cursor for next chunk (if any)
+        - pagination_info: token counts and chunk info
+        - commit_format_guide: formatting rules for commit messages
     """
     try:
         # Get working directory from MCP roots if repo_path not provided
@@ -60,19 +73,22 @@ async def get_commit_context(
             else:
                 return json.dumps({'error': 'No repository path provided and no roots available'})
 
-        staged_only = not include_unstaged
+        # Get file stats (staged changes only)
+        stats = git_operations.get_file_stats(repo_path)
 
-        # Get file stats
-        stats = git_operations.get_file_stats(repo_path, staged_only=staged_only)
-
-        # Get full diff
-        diff_output = git_operations.get_diff(repo_path, staged_only=staged_only)
+        # Get full diff (staged changes only)
+        diff_output = git_operations.get_diff(repo_path)
 
         # Paginate diff by token count
         paginated = git_operations.paginate_diff(diff_output, cursor, max_diff_tokens)
 
+        # Check if there are any changes - trust the diff as source of truth
+        # If git diff --staged is empty, there's nothing to commit
+        has_changes = bool(diff_output.strip())
+
         result = {
             'repository': repo_path,
+            'has_changes': has_changes,
             'files': stats['files'],
             'diff': paginated['diff_chunk'],
             'next_cursor': paginated['next_cursor'],

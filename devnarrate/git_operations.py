@@ -41,26 +41,20 @@ def count_tokens(text: str) -> int:
         return len(text) // 4
 
 
-def get_diff(repo_path: str, staged_only: bool = True) -> str:
-    """Get git diff output.
+def get_diff(repo_path: str) -> str:
+    """Get git diff output for staged changes only.
 
     Args:
         repo_path: Path to the git repository
-        staged_only: If True, only get staged changes (--staged), else all changes (HEAD)
 
     Returns:
-        Raw git diff output
+        Raw git diff output for staged changes
 
     Raises:
         subprocess.CalledProcessError: If git command fails
     """
-    if staged_only:
-        cmd = ['git', 'diff', '--staged']
-    else:
-        cmd = ['git', 'diff', 'HEAD']
-
     result = subprocess.run(
-        cmd,
+        ['git', 'diff', '--staged'],
         cwd=repo_path,
         capture_output=True,
         text=True,
@@ -69,21 +63,18 @@ def get_diff(repo_path: str, staged_only: bool = True) -> str:
     return result.stdout
 
 
-def get_file_stats(repo_path: str, staged_only: bool = True) -> dict:
-    """Get statistics about changed files.
+def get_file_stats(repo_path: str) -> dict:
+    """Get statistics about staged files only.
 
     Args:
         repo_path: Path to the git repository
-        staged_only: If True, only get staged changes
 
     Returns:
-        Dict with file changes
+        Dict with staged file changes
     """
     # Get list of changed files with status
-    status_cmd = ['git', 'status', '--porcelain']
-
     status_result = subprocess.run(
-        status_cmd,
+        ['git', 'status', '--porcelain'],
         cwd=repo_path,
         capture_output=True,
         text=True,
@@ -98,27 +89,21 @@ def get_file_stats(repo_path: str, staged_only: bool = True) -> dict:
             continue
 
         staged_status = line[0]
-        unstaged_status = line[1]
         filepath = line[3:]
 
-        # If staged_only, skip untracked files and files with no staged changes
-        if staged_only and staged_status in (' ', '?'):
+        # Skip files with no staged changes (untracked or not staged)
+        if staged_status in (' ', '?'):
             continue
 
-        # Use staged status if staged_only, otherwise prioritize staged over unstaged
-        status_char = staged_status if staged_only else (staged_status if staged_status != ' ' else unstaged_status)
-
         file_status = 'modified'
-        if status_char == 'A':
+        if staged_status == 'A':
             file_status = 'added'
-        elif status_char == 'D':
+        elif staged_status == 'D':
             file_status = 'deleted'
-        elif status_char == 'M':
+        elif staged_status == 'M':
             file_status = 'modified'
-        elif status_char == 'R':
+        elif staged_status == 'R':
             file_status = 'renamed'
-        elif status_char == '?':
-            file_status = 'untracked'
 
         files.append({
             'path': filepath,
