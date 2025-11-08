@@ -159,7 +159,7 @@ async def get_pr_context(
     base_branch: str,
     head_branch: Optional[str] = None,
     cursor: Optional[str] = None,
-    max_diff_tokens: int = 20000,
+    max_diff_tokens: int = 12000,
     repo_path: Optional[str] = None
 ) -> str:
     """Get diff and commits between branches for PR description.
@@ -175,7 +175,7 @@ async def get_pr_context(
         base_branch: Base branch to compare against (e.g., "main", "dev")
         head_branch: Head branch (defaults to current branch)
         cursor: Pagination cursor for large diffs (optional, returned as next_cursor)
-        max_diff_tokens: Maximum tokens per response (default: 20000)
+        max_diff_tokens: Maximum tokens per diff chunk (default: 12000, leaves room for commits/files in 25k limit)
         repo_path: Path to git repository (optional, defaults to Claude's working directory)
 
     Returns:

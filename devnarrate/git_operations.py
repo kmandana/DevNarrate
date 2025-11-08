@@ -88,8 +88,9 @@ def get_file_stats(repo_path: str) -> dict:
         if not line:
             continue
 
+        # First 2 chars are status codes (XY), rest is filepath
         staged_status = line[0]
-        filepath = line[3:]
+        filepath = line[2:].strip()  # Skip status codes and strip whitespace
 
         # Skip files with no staged changes (untracked or not staged)
         if staged_status in (' ', '?'):
