@@ -1,5 +1,5 @@
 # DevNarrate
-The AI that narrates your code changes, from commits to deployments.
+MCP server that narrates your code changes, from commits to deployments.
 
 ## Features
 
@@ -10,30 +10,79 @@ The AI that narrates your code changes, from commits to deployments.
 - **Template System**: Use custom PR templates or built-in defaults
 - **Safety First**: Only works with staged changes to prevent accidental commits
 
-## Setup
+## Installation
 
-### Prerequisites
+### Option 1: Install from PyPI (Recommended)
 
-Install [uv](https://docs.astral.sh/uv/getting-started/installation/) (Python package manager):
+1. **Install the package:**
+```bash
+pip install devnarrate
+
+# Or for pre-release versions:
+pip install --pre devnarrate
+```
+
+2. **Configure with Claude Code:**
+```bash
+# Add MCP server globally (available in all projects)
+claude mcp add --scope user DevNarrate -- python -m devnarrate.server
+
+# Or add for current project only
+claude mcp add DevNarrate -- python -m devnarrate.server
+
+# Verify it's connected
+claude mcp list
+```
+
+3. **Configure with Cursor:**
+
+Edit `~/.cursor/mcp.json`:
+```json
+{
+  "mcpServers": {
+    "DevNarrate": {
+      "command": "python",
+      "args": ["-m", "devnarrate.server"]
+    }
+  }
+}
+```
+
+Then restart Cursor.
+
+### Option 2: Install from Source (Development)
+
+1. **Prerequisites:** Install [uv](https://docs.astral.sh/uv/getting-started/installation/):
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-### Installation with Claude Code
-
-1. Install dependencies:
+2. **Clone and setup:**
 ```bash
+git clone <>
+cd DevNarrate
 uv sync
 ```
 
-2. Add MCP server:
+3. **Configure with Claude Code:**
 ```bash
+# Add MCP server globally (available in all projects)
+claude mcp add --scope user DevNarrate -- uv --directory /path/to/DevNarrate run python -m devnarrate.server
+
+# Or add for current project only
 claude mcp add DevNarrate -- uv --directory /path/to/DevNarrate run python -m devnarrate.server
 ```
 
-3. Verify:
-```bash
-claude mcp list
+4. **Configure with Cursor:**
+```json
+{
+  "mcpServers": {
+    "DevNarrate": {
+      "command": "uv",
+      "args": ["--directory", "/path/to/DevNarrate", "run", "python", "-m", "devnarrate.server"]
+    }
+  }
+}
 ```
 
 ## Usage
