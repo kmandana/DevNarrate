@@ -1,4 +1,7 @@
 # DevNarrate
+[![PyPI](https://img.shields.io/pypi/v/devnarrate?label=PyPI&color=3775A9)](https://pypi.org/project/devnarrate/)
+[![Package Status](https://img.shields.io/pypi/status/devnarrate)](https://pypi.org/project/devnarrate/)
+
 MCP server that narrates your code changes, from commits to deployments.
 
 ## Features
@@ -10,118 +13,85 @@ MCP server that narrates your code changes, from commits to deployments.
 - **Template System**: Use custom PR templates or built-in defaults
 - **Safety First**: Only works with staged changes to prevent accidental commits
 
-## Installation
+## Installation (Source / Development)
 
-### Option 1: Install from PyPI (Recommended)
+### 1. Install uv
 
-1. **Install the package:**
 ```bash
-pip install devnarrate
-
-# Or for pre-release versions:
-pip install --pre devnarrate
+curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-2. **Configure with Claude Code:**
+### 2. Clone and set up
+
 ```bash
-# Add MCP server globally (available in all projects)
-claude mcp add --scope user DevNarrate -- python -m devnarrate.server
-
-# Or add for current project only
-claude mcp add DevNarrate -- python -m devnarrate.server
-
-# Verify it's connected
-claude mcp list
+git clone https://github.com/krishnamandanapu/DevNarrate.git
+cd DevNarrate
+uv sync
 ```
 
-3. **Configure with Cursor:**
+### 3. Register the MCP server
 
-Edit `~/.cursor/mcp.json`:
+The server must be launched with the Python interpreter from your uv-managed virtual environment (typically `/path/to/DevNarrate/.venv/bin/python` on macOS/Linux or `.venv\\Scripts\\python.exe` on Windows).
+
+```bash
+# capture the interpreter path once
+VENV_PY=$(pwd)/.venv/bin/python
+
+# Claude Code (global scope)
+claude mcp add --scope user DevNarrate -- "$VENV_PY" -m devnarrate.server
+
+# Claude Code (project scope)
+claude mcp add DevNarrate -- "$VENV_PY" -m devnarrate.server
+```
+
+Cursor (`~/.cursor/mcp.json`):
 ```json
 {
   "mcpServers": {
     "DevNarrate": {
-      "command": "python",
+      "command": "/path/to/DevNarrate/.venv/bin/python",
       "args": ["-m", "devnarrate.server"]
     }
   }
 }
 ```
 
-Then restart Cursor.
-
-### Option 2: Install from Source (Development)
-
-1. **Prerequisites:** Install [uv](https://docs.astral.sh/uv/getting-started/installation/):
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
-
-2. **Clone and setup:**
-```bash
-git clone <>
-cd DevNarrate
-uv sync
-```
-
-3. **Configure with Claude Code:**
-```bash
-# Add MCP server globally (available in all projects)
-claude mcp add --scope user DevNarrate -- uv --directory /path/to/DevNarrate run python -m devnarrate.server
-
-# Or add for current project only
-claude mcp add DevNarrate -- uv --directory /path/to/DevNarrate run python -m devnarrate.server
-```
-
-4. **Configure with Cursor:**
-```json
-{
-  "mcpServers": {
-    "DevNarrate": {
-      "command": "uv",
-      "args": ["--directory", "/path/to/DevNarrate", "run", "python", "-m", "devnarrate.server"]
-    }
-  }
-}
-```
+For pip-based installation steps, head to https://pypi.org/project/devnarrate/.
 
 ## Usage
 
 ### Commit Messages
 
-**Important:** DevNarrate only works with **staged changes** to ensure you have full control over what gets committed. This prevents accidental commits of unintended files.
+DevNarrate only works with **staged changes** to keep you in control.
 
-1. First, stage the files you want to commit:
 ```bash
 git add <file1> <file2>
-# or for all tracked files with changes:
+# or stage everything tracked:
 git add -u
 ```
 
-2. Ask Claude to generate the commit message:
+Then ask Claude:
+
 ```
-Ask Claude: "Generate a commit message for my changes"
+Generate a commit message for my changes
 ```
 
-3. Claude will analyze your staged changes, show you the proposed commit message, and ask for approval before committing.
-
-If you haven't staged any changes, Claude will prompt you to stage them first.
+Claude inspects the staged diff, proposes a conventional commit message, and asks for approval before running `git commit`.
 
 ### PR Descriptions
 
 1. Ask Claude: "Create a PR to main from my current branch"
-2. Claude will analyze the diff and ask which template to use (if you have custom templates)
-3. Claude generates the PR description and shows it to you
-4. Review and approve, then Claude creates the PR
+2. Claude analyzes the diff and offers template options (custom templates live in `.devnarrate/pr-templates/`)
+3. Review the generated description and approve to let Claude create the PR via `gh` or `glab`
 
 ### PR Templates (Optional)
-Create custom templates in `.devnarrate/pr-templates/`:
 
 ```bash
 mkdir -p .devnarrate/pr-templates
 ```
 
-Example template (`.devnarrate/pr-templates/feature.md`):
+Example (`.devnarrate/pr-templates/feature.md`):
+
 ```markdown
 ## Summary
 [What does this PR do?]
@@ -137,12 +107,22 @@ Example template (`.devnarrate/pr-templates/feature.md`):
 [Links]
 ```
 
-If no templates exist, a default template will be used.
+If no template is found, DevNarrate falls back to its default format.
 
-## Platform Support
+### Platform Support
 
-**Commits:** Works everywhere (uses git)
+- **Commits:** Works anywhere git runs
+- **PRs:** Requires platform CLIs
+  - GitHub: Install [gh](https://cli.github.com/) and run `gh auth login`
+  - GitLab: Install [glab](https://gitlab.com/gitlab-org/cli) and run `glab auth login`
 
-**PRs:** Requires platform CLI:
-- GitHub: Install [gh](https://cli.github.com/) and run `gh auth login`
-- GitLab: Install [glab](https://gitlab.com/gitlab-org/cli) and run `glab auth login`
+## Development
+
+- Format/lint through uv-managed tooling
+- Build artifacts with `uv run pyproject-build`
+- Use `bump-my-version` (see `RELEASING.md`) for tagged releases
+
+## License
+
+MIT
+
