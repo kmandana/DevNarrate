@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "devnarrate"
 version = "0.1.0a2"
 description = "MCP server that narrates your code changes, from commits to deployments."
-readme = "README.md"
+readme = {file = "README.pypi.md", content-type = "text/markdown"}
 requires-python = ">=3.12"
 license = {text = "MIT"}
 authors = [
@@ -31,3 +31,5 @@ dependencies = [
 ]
 
 [project.urls]
+Homepage = "https://github.com/kmandana/DevNarrate"
+Documentation = "https://pypi.org/project/devnarrate/"
