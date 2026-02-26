@@ -2,11 +2,12 @@
 [![GitHub Repo](https://img.shields.io/badge/GitHub-kmandana%2FDevNarrate-24292F?logo=github)](https://github.com/kmandana/DevNarrate)
 [![Release](https://img.shields.io/github/v/release/kmandana/DevNarrate?label=Release)](https://github.com/kmandana/DevNarrate/releases)
 
-MCP server that narrates your code changes, from commits to deployments.
+MCP server for developer workflow automation — smart commits, secret scanning, PR descriptions, and more.
 
 ## Features
 
 - **Smart Commit Messages** with user approval
+- **Secret Scanning** — detect API keys, tokens, passwords, and private keys before they reach your repo (25+ detectors via [detect-secrets](https://github.com/Yelp/detect-secrets))
 - **PR Descriptions** driven by customizable templates
 - **GitHub & GitLab** support for PR flows
 - **Token-aware diff handling** with automatic pagination
@@ -69,6 +70,10 @@ Generate a commit message for my changes
 ```
 
 DevNarrate summarizes the diff, proposes a conventional commit, and waits for approval before committing.
+
+### Secret Scanning
+
+Secret scanning runs automatically when you ask for a commit message. DevNarrate scans staged diffs for API keys, tokens, passwords, and private keys. If secrets are found, you're warned before committing. Suppress false positives with an inline `# pragma: allowlist secret` comment.
 
 ### PR Descriptions
 
