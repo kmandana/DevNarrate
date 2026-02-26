@@ -16,6 +16,7 @@ from typing import Optional
 from mcp.server.fastmcp import FastMCP
 
 from . import git_operations
+from . import secret_scanner
 
 # Create MCP server instance
 mcp = FastMCP("devnarrate")
@@ -44,10 +45,29 @@ async def get_commit_context(
     Returns file changes and diff output with TOKEN-BASED pagination (MCP limit: 25k tokens).
     Large diffs are automatically paginated to stay under the token limit.
 
-    After receiving a non-empty diff, analyze it and generate a commit message following:
-    - 50/72 rule: 50 char subject line, 72 char body lines
-    - Conventional commits format: type(scope): description
-    - DO NOT include AI signatures, attribution, or "Generated with" footers
+    ANALYZING THE RESPONSE - follow these steps in order:
+
+    1. SECRET SCAN (automated): Check secret_scan.status FIRST.
+       - If "warnings_found": STOP and warn the user about each finding.
+         Show the file, line number, type, and redacted preview for each finding.
+         Recommend removing the secret before committing.
+         Do NOT proceed to generate a commit message until the user acknowledges
+         or explicitly chooses to proceed despite the warnings.
+       - If "clean": proceed to step 2.
+
+    2. SECRET SCAN (your review): Even if the automated scan is clean, briefly review
+       the diff yourself for anything the regex-based scanner might miss:
+       - Hardcoded credentials or secrets in unusual formats
+       - Internal URLs, IP addresses, or hostnames that shouldn't be committed
+       - Sensitive configuration values (database hosts, internal endpoints)
+       - Comments containing passwords or access instructions
+       If you spot anything suspicious, warn the user before proceeding.
+
+    3. COMMIT MESSAGE: After confirming no secrets (or user acknowledgment), generate
+       a commit message following:
+       - 50/72 rule: 50 char subject line, 72 char body lines
+       - Conventional commits format: type(scope): description
+       - DO NOT include AI signatures, attribution, or "Generated with" footers
 
     Args:
         cursor: Pagination cursor for large diffs (optional, returned as next_cursor)
@@ -58,6 +78,7 @@ async def get_commit_context(
         JSON string with:
         - has_changes: boolean - True if there are any staged changes to commit
         - files: list of changed files with status
+        - secret_scan: results of secret detection on added lines
         - diff: the diff chunk (paginated)
         - next_cursor: pagination cursor for next chunk (if any)
         - pagination_info: token counts and chunk info
@@ -86,10 +107,22 @@ async def get_commit_context(
         # If git diff --staged is empty, there's nothing to commit
         has_changes = bool(diff_output.strip())
 
+        # Scan for secrets in added lines (only on first page, not paginated follow-ups)
+        if has_changes and cursor is None:
+            secret_scan = secret_scanner.scan_diff(diff_output)
+        else:
+            secret_scan = {
+                'status': 'clean',
+                'findings': [],
+                'total_findings': 0,
+                'message': 'No changes to scan.' if not has_changes else 'Secret scan performed on first page only.',
+            }
+
         result = {
             'repository': repo_path,
             'has_changes': has_changes,
             'files': stats['files'],
+            'secret_scan': secret_scan,
             'diff': paginated['diff_chunk'],
             'next_cursor': paginated['next_cursor'],
             'pagination_info': paginated['chunk_info'],
