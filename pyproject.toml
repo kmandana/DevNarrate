@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "devnarrate"
 version = "0.1.0a4"
-description = "MCP server that narrates your code changes, from commits to deployments."
+description = "MCP server for developer workflow automation — smart commits, secret scanning, PR descriptions, and more."
 readme = {file = "README.pypi.md", content-type = "text/markdown"}
 requires-python = ">=3.12"
 license = {text = "MIT"}
@@ -15,7 +15,7 @@ authors = [
 maintainers = [
     {name = "K Man"}
 ]
-keywords = ["git", "commit", "pr", "ai", "mcp", "claude"]
+keywords = ["git", "commit", "pr", "ai", "mcp", "claude", "secrets", "security", "developer-tools"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -24,6 +24,8 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Topic :: Software Development :: Version Control :: Git",
     "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Security",
 ]
 dependencies = [
     "mcp[cli]>=1.20.0",
@@ -44,4 +46,6 @@ testpaths = ["tests"]
 
 [project.urls]
 Homepage = "https://github.com/kmandana/DevNarrate"
-Documentation = "https://pypi.org/project/devnarrate/"
+Documentation = "https://github.com/kmandana/DevNarrate#readme"
+Issues = "https://github.com/kmandana/DevNarrate/issues"
+Changelog = "https://github.com/kmandana/DevNarrate/releases"

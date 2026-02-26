@@ -2,11 +2,12 @@
 [![PyPI](https://img.shields.io/pypi/v/devnarrate?label=PyPI&color=3775A9)](https://pypi.org/project/devnarrate/)
 [![Package Status](https://img.shields.io/pypi/status/devnarrate)](https://pypi.org/project/devnarrate/)
 
-MCP server that narrates your code changes, from commits to deployments.
+MCP server for developer workflow automation — smart commits, secret scanning, PR descriptions, and more.
 
 ## Features
 
 - **Smart Commit Messages**: Generate conventional commit messages from staged changes with full user control
+- **Secret Scanning**: Detect leaked API keys, tokens, passwords, and private keys in staged diffs before they reach your repo — powered by [detect-secrets](https://github.com/Yelp/detect-secrets) with 25+ built-in detectors
 - **PR Descriptions**: Create detailed pull request descriptions with customizable templates
 - **Multi-Platform**: Supports GitHub and GitLab
 - **Token-Aware**: Handles large diffs with automatic pagination
@@ -77,6 +78,21 @@ Generate a commit message for my changes
 ```
 
 Claude inspects the staged diff, proposes a conventional commit message, and asks for approval before running `git commit`.
+
+### Secret Scanning
+
+Secret scanning runs automatically as part of `get_commit_context`. When you stage changes and ask for a commit message, DevNarrate scans the diff for:
+
+- **API keys** (AWS, Google, Stripe, GitHub, Slack, etc.)
+- **Passwords & tokens** in config files
+- **Private keys** (RSA, SSH, PGP)
+- **High-entropy strings** that look like secrets
+
+If secrets are found, Claude warns you before committing. To suppress false positives, add an inline comment:
+
+```python
+SAFE_VALUE = "not-a-real-secret"  # pragma: allowlist secret
+```
 
 ### PR Descriptions
 
