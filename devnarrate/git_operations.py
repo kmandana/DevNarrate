@@ -372,6 +372,87 @@ def get_branch_file_stats(repo_path: str, base_branch: str, head_branch: Optiona
     return {'files': files}
 
 
+def get_working_diff(repo_path: str) -> str:
+    """Get diff of all unstaged working tree changes.
+
+    Unlike get_diff() which shows staged changes (--staged), this shows
+    modifications in the working tree that have not been staged yet.
+
+    Args:
+        repo_path: Path to the git repository
+
+    Returns:
+        Raw git diff output for unstaged working tree changes
+    """
+    result = subprocess.run(
+        ['git', 'diff'],
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+        check=True
+    )
+    return result.stdout
+
+
+def get_untracked_files(repo_path: str) -> list[str]:
+    """Get list of untracked file paths.
+
+    Args:
+        repo_path: Path to the git repository
+
+    Returns:
+        List of untracked file paths relative to repo root
+    """
+    result = subprocess.run(
+        ['git', 'ls-files', '--others', '--exclude-standard'],
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+        check=True
+    )
+    return [f for f in result.stdout.strip().split('\n') if f]
+
+
+def get_working_file_stats(repo_path: str) -> dict:
+    """Get file statistics for working tree changes (modified + untracked).
+
+    Args:
+        repo_path: Path to the git repository
+
+    Returns:
+        Dict with file changes including both modified and untracked files
+    """
+    files = []
+
+    # Get modified/deleted files in working tree
+    status_result = subprocess.run(
+        ['git', 'status', '--porcelain'],
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+        check=True
+    )
+
+    for line in status_result.stdout.strip().split('\n'):
+        if not line:
+            continue
+
+        # Format: XY filepath (X=staged, Y=unstaged)
+        unstaged_status = line[1]
+        filepath = line[2:].strip()
+
+        # Only include unstaged working tree changes
+        if unstaged_status == 'M':
+            files.append({'path': filepath, 'status': 'modified'})
+        elif unstaged_status == 'D':
+            files.append({'path': filepath, 'status': 'deleted'})
+        elif line[0] == '?':
+            # Untracked files show as ?? filepath
+            files.append({'path': filepath, 'status': 'added'})
+
+    return {'files': files}
+
+
 def detect_git_platform(repo_path: str) -> str:
     """Detect git platform from remote URL.
 
