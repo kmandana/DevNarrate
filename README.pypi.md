@@ -6,6 +6,7 @@ MCP server for developer workflow automation — smart commits, secret scanning,
 
 ## Features
 
+- **Change Review** — understand AI-generated code changes before committing with narrative summaries, goal alignment, and attention guides
 - **Smart Commit Messages** with user approval
 - **Secret Scanning** — detect API keys, tokens, passwords, and private keys before they reach your repo (25+ detectors via [detect-secrets](https://github.com/Yelp/detect-secrets))
 - **PR Descriptions** driven by customizable templates
@@ -70,6 +71,10 @@ Generate a commit message for my changes
 ```
 
 DevNarrate summarizes the diff, proposes a conventional commit, and waits for approval before committing.
+
+### Change Review
+
+After an AI assistant makes changes, ask it to review them before committing. DevNarrate presents a layered summary: narrative overview, goal grouping (known, inferred, unrecognized), and an attention guide highlighting what needs human review.
 
 ### Secret Scanning
 
