@@ -1,3 +1,3 @@
 """DevNarrate - MCP server for developer workflow automation."""
 
-__version__ = "0.1.0a5"
+__version__ = "0.1.0a6"
