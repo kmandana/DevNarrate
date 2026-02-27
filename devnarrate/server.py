@@ -15,6 +15,7 @@ from typing import Optional
 
 from mcp.server.fastmcp import FastMCP
 
+from . import change_analyzer
 from . import git_operations
 from . import secret_scanner
 
@@ -334,6 +335,137 @@ async def create_pr(
         return f"Error creating PR: {e.stderr if e.stderr else str(e)}\n\nMake sure the platform CLI is installed and configured (gh for GitHub, glab for GitLab)"
     except Exception as e:
         return f"Error: {str(e)}"
+
+
+@mcp.tool()
+async def review_changes(
+    goal: str,
+    scope: str = "working",
+    repo_path: Optional[str] = None
+) -> str:
+    """Review code changes before staging/committing to understand what was done and why.
+
+    WHEN TO CALL: After you (the AI assistant) have made code changes on behalf
+    of the user and BEFORE staging or committing. This lets the user understand
+    what you did at a conceptual level rather than reading raw diffs.
+
+    REQUIRED: Before calling this tool, summarize what the user asked you to do.
+    Pass this as the 'goal' parameter. Be specific — "add JWT authentication
+    middleware" is better than "make changes".
+
+    HOW TO PRESENT THE RESPONSE — follow this layered approach:
+
+    1. NARRATIVE SUMMARY (always show first):
+       Start with a plain-language summary of what changed.
+       Example: "I made 5 changes across 3 files to add JWT authentication."
+       Include the key stats: files added/modified/deleted, lines changed.
+
+    2. GOAL ALIGNMENT (group changes by purpose):
+       Look at each changed file and classify it into one of three tiers:
+       - KNOWN: Changes that directly relate to the 'goal' you passed.
+         You know these because you made them for the stated purpose.
+       - INFERRED: Changes whose context_clues (comments, docstrings) suggest
+         a clear purpose different from the stated goal. These may be from
+         a different AI agent session. Describe the inferred purpose.
+       - UNKNOWN: Changes with no clear connection to any goal AND no useful
+         context clues. Flag these — the user should review them.
+
+    3. PER-FILE BREAKDOWN:
+       For each goal group, list the files with a short description of what
+       changed. Read the diff to explain HOW the goal was achieved:
+       - What functions/classes were added or modified?
+       - What's the approach? (e.g., "Added middleware pattern using decorators")
+       - Any notable implementation choices?
+
+    4. ATTENTION GUIDE:
+       Tell the user what needs their eyes vs what's routine:
+       - NEW FILES: "I created auth/middleware.py — worth a quick review"
+       - MODIFIED FILES: "Added 3 lines to config.py — routine import addition"
+       - UNKNOWN CHANGES: "utils.py was modified but doesn't match the goal — please check"
+       - LARGE CHANGES: Any file with 50+ lines added deserves a mention
+
+    5. DETAIL ON DEMAND:
+       End with: "Want me to walk through any specific file in detail?"
+
+    IMPORTANT: You have the full diff in the response — READ IT to understand
+    the actual code in any programming language. The context_clues are supplementary
+    hints (comments/docstrings) to help you classify changes from other sessions
+    that you didn't make yourself.
+
+    Args:
+        goal: What the user asked the AI to do. Summarize from your conversation.
+              Be specific — this is used to classify changes into goal groups.
+        scope: What to analyze:
+               - "working" (default): All unstaged working tree changes (git diff)
+                 plus untracked files. Use this before staging.
+               - "staged": Only staged changes (git diff --staged). Use this
+                 if the user has already staged specific files.
+        repo_path: Path to git repository (optional, defaults to MCP roots).
+
+    Returns:
+        JSON string with:
+        - goal: The stated goal (pass-through for your reference)
+        - summary: File and line count statistics
+        - changes: Per-file stats (path, status, lines_added, lines_removed)
+        - context_clues: Comments and docstrings from added lines (per file)
+        - diff: Raw diff text for you to read and understand the code
+        - untracked_files: List of new files not yet tracked by git (working scope only)
+        - pagination_info: Token counts and chunk info for the diff
+    """
+    try:
+        # Get working directory from MCP roots if repo_path not provided
+        if repo_path is None:
+            context = mcp.get_context()
+            roots_result = await context.session.list_roots()
+            if roots_result.roots:
+                repo_path = roots_result.roots[0].uri.path
+            else:
+                return json.dumps({'error': 'No repository path provided and no roots available'})
+
+        # Get diff based on scope
+        if scope == "staged":
+            diff_output = git_operations.get_diff(repo_path)
+            stats = git_operations.get_file_stats(repo_path)
+            untracked = []
+        else:
+            diff_output = git_operations.get_working_diff(repo_path)
+            stats = git_operations.get_working_file_stats(repo_path)
+            untracked = git_operations.get_untracked_files(repo_path)
+
+        has_changes = bool(diff_output.strip()) or bool(untracked)
+
+        if not has_changes:
+            return json.dumps({
+                'goal': goal,
+                'has_changes': False,
+                'message': 'No changes found in the working tree.' if scope == 'working'
+                           else 'No staged changes found.',
+            }, indent=2)
+
+        # Analyze the diff for structured metadata
+        analysis = change_analyzer.analyze_changes(diff_output, stats.get('files', []))
+
+        # Paginate the diff to stay under token limits
+        paginated = git_operations.paginate_diff(diff_output, None)
+
+        result = {
+            'goal': goal,
+            'has_changes': True,
+            'summary': analysis['summary'],
+            'changes': analysis['changes'],
+            'context_clues': analysis['context_clues'],
+            'diff': paginated['diff_chunk'],
+            'next_cursor': paginated['next_cursor'],
+            'pagination_info': paginated['chunk_info'],
+        }
+
+        if untracked:
+            result['untracked_files'] = untracked
+
+        return json.dumps(result, indent=2)
+
+    except Exception as e:
+        return json.dumps({'error': str(e)})
 
 
 if __name__ == "__main__":
