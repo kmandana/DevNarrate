@@ -233,6 +233,142 @@ class TestGetPrContext:
 # ──────────────────────────────────
 
 
+# ──────────────────────────────────
+# Tests for review_changes
+# ──────────────────────────────────
+
+
+class TestReviewChanges:
+    """Integration tests for the review_changes MCP tool."""
+
+    @pytest.mark.asyncio
+    async def test_no_changes(self, tmp_git_repo):
+        """No working tree changes → has_changes=False."""
+        async with create_session(
+            devnarrate_mcp,
+            list_roots_callback=_roots_callback(str(tmp_git_repo)),
+        ) as client:
+            result = await client.call_tool(
+                "review_changes", {"goal": "test goal"}
+            )
+            data = json.loads(result.content[0].text)
+            assert data["has_changes"] is False
+
+    @pytest.mark.asyncio
+    async def test_working_tree_changes_detected(self, tmp_git_repo):
+        """Modified tracked file appears in review."""
+        readme = tmp_git_repo / "README.md"
+        readme.write_text("# Updated Repo\nNew content here.\n")
+
+        async with create_session(
+            devnarrate_mcp,
+            list_roots_callback=_roots_callback(str(tmp_git_repo)),
+        ) as client:
+            result = await client.call_tool(
+                "review_changes", {"goal": "update readme"}
+            )
+            data = json.loads(result.content[0].text)
+            assert data["has_changes"] is True
+            assert data["goal"] == "update readme"
+            assert "README.md" in data["diff"]
+            assert data["summary"]["total_files"] >= 1
+
+    @pytest.mark.asyncio
+    async def test_untracked_files_included(self, tmp_git_repo):
+        """New untracked files show up in the response."""
+        new_file = tmp_git_repo / "brand_new.py"
+        new_file.write_text("# Brand new file\nprint('hello')\n")
+
+        async with create_session(
+            devnarrate_mcp,
+            list_roots_callback=_roots_callback(str(tmp_git_repo)),
+        ) as client:
+            result = await client.call_tool(
+                "review_changes", {"goal": "add new module"}
+            )
+            data = json.loads(result.content[0].text)
+            assert data["has_changes"] is True
+            assert "brand_new.py" in data.get("untracked_files", [])
+
+    @pytest.mark.asyncio
+    async def test_staged_scope(self, tmp_git_repo):
+        """scope=staged uses staged changes instead of working tree."""
+        f = tmp_git_repo / "staged.py"
+        f.write_text("x = 1\n")
+        subprocess.run(
+            ["git", "add", "staged.py"],
+            cwd=tmp_git_repo, capture_output=True, check=True,
+        )
+
+        async with create_session(
+            devnarrate_mcp,
+            list_roots_callback=_roots_callback(str(tmp_git_repo)),
+        ) as client:
+            result = await client.call_tool(
+                "review_changes",
+                {"goal": "add staged file", "scope": "staged"},
+            )
+            data = json.loads(result.content[0].text)
+            assert data["has_changes"] is True
+            assert "staged.py" in data["diff"]
+
+    @pytest.mark.asyncio
+    async def test_context_clues_extracted(self, tmp_git_repo):
+        """Comments and docstrings from changed files appear in context_clues."""
+        f = tmp_git_repo / "documented.py"
+        f.write_text('"""Module for data processing."""\n\n# Transform raw input\ndef transform(data):\n    pass\n')
+        subprocess.run(
+            ["git", "add", "documented.py"],
+            cwd=tmp_git_repo, capture_output=True, check=True,
+        )
+
+        async with create_session(
+            devnarrate_mcp,
+            list_roots_callback=_roots_callback(str(tmp_git_repo)),
+        ) as client:
+            result = await client.call_tool(
+                "review_changes",
+                {"goal": "add data processing", "scope": "staged"},
+            )
+            data = json.loads(result.content[0].text)
+            clues = data.get("context_clues", [])
+            assert len(clues) >= 1
+            # Should find the comment and/or docstring
+            all_comments = []
+            all_docstrings = []
+            for clue in clues:
+                all_comments.extend(clue.get("comments", []))
+                all_docstrings.extend(clue.get("docstrings", []))
+            assert any("Transform raw input" in c for c in all_comments) or \
+                   any("data processing" in d for d in all_docstrings)
+
+    @pytest.mark.asyncio
+    async def test_response_structure(self, tmp_git_repo):
+        """Response has all required top-level keys."""
+        readme = tmp_git_repo / "README.md"
+        readme.write_text("# Changed\n")
+
+        async with create_session(
+            devnarrate_mcp,
+            list_roots_callback=_roots_callback(str(tmp_git_repo)),
+        ) as client:
+            result = await client.call_tool(
+                "review_changes", {"goal": "test structure"}
+            )
+            data = json.loads(result.content[0].text)
+            assert "goal" in data
+            assert "summary" in data
+            assert "changes" in data
+            assert "context_clues" in data
+            assert "diff" in data
+            assert "pagination_info" in data
+
+
+# ──────────────────────────────────
+# Tests for create_pr
+# ──────────────────────────────────
+
+
 class TestCreatePr:
     """Integration tests for the create_pr MCP tool."""
 
