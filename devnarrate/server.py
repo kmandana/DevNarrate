@@ -16,6 +16,7 @@ from typing import Optional
 from mcp.server.fastmcp import FastMCP
 
 from . import change_analyzer
+from . import config as config_module
 from . import git_operations
 from . import secret_scanner
 
@@ -95,6 +96,11 @@ async def get_commit_context(
             else:
                 return json.dumps({'error': 'No repository path provided and no roots available'})
 
+        # Load project config
+        cfg = config_module.load_config(repo_path)
+        commit_cfg = cfg["commit"]
+        secrets_cfg = cfg["secrets"]
+
         # Get file stats (staged changes only)
         stats = git_operations.get_file_stats(repo_path)
 
@@ -109,14 +115,23 @@ async def get_commit_context(
         has_changes = bool(diff_output.strip())
 
         # Scan for secrets in added lines (only on first page, not paginated follow-ups)
-        if has_changes and cursor is None:
-            secret_scan = secret_scanner.scan_diff(diff_output)
+        if has_changes and cursor is None and secrets_cfg.get("enabled", True):
+            secret_scan = secret_scanner.scan_diff(
+                diff_output,
+                max_findings=secrets_cfg.get("max_findings"),
+                custom_patterns=secrets_cfg.get("custom_patterns"),
+            )
         else:
+            reason = 'No changes to scan.'
+            if has_changes and cursor is not None:
+                reason = 'Secret scan performed on first page only.'
+            elif has_changes and not secrets_cfg.get("enabled", True):
+                reason = 'Secret scanning disabled in .devnarrate/config.toml.'
             secret_scan = {
                 'status': 'clean',
                 'findings': [],
                 'total_findings': 0,
-                'message': 'No changes to scan.' if not has_changes else 'Secret scan performed on first page only.',
+                'message': reason,
             }
 
         result = {
@@ -128,10 +143,11 @@ async def get_commit_context(
             'next_cursor': paginated['next_cursor'],
             'pagination_info': paginated['chunk_info'],
             'commit_format_guide': {
-                'subject_line': 'Max 50 characters',
-                'body_line_length': 'Max 72 characters per line',
+                'subject_line': f'Max {commit_cfg["max_subject_length"]} characters',
+                'body_line_length': f'Max {commit_cfg["max_body_line_length"]} characters per line',
                 'format': 'type(scope): description\\n\\nBody paragraphs...\\n\\nFooter',
-                'types': ['feat', 'fix', 'docs', 'style', 'refactor', 'test', 'chore'],
+                'types': commit_cfg["types"],
+                'require_scope': commit_cfg.get("require_scope", False),
                 'important': 'DO NOT include AI signatures, attribution, or "Generated with" footers in the commit message'
             }
         }
@@ -225,6 +241,10 @@ async def get_pr_context(
             else:
                 return json.dumps({'error': 'No repository path provided and no roots available'})
 
+        # Load project config
+        cfg = config_module.load_config(repo_path)
+        pr_cfg = cfg["pr"]
+
         # Get current branch if head not specified
         if head_branch is None:
             head_branch = git_operations.get_current_branch(repo_path)
@@ -244,6 +264,20 @@ async def get_pr_context(
         # Detect platform
         platform = git_operations.detect_git_platform(repo_path)
 
+        # Build template instructions with config-aware defaults
+        template_instructions = {
+            'templates_directory': '.devnarrate/pr-templates/',
+            'default_template_available': True,
+            'steps': [
+                '1. Check if .devnarrate/pr-templates/ exists',
+                '2. If yes, list templates and ask user which to use',
+                '3. Read chosen template or use DEFAULT_PR_TEMPLATE',
+                '4. Fill template with analysis of commits and diff'
+            ],
+        }
+        if pr_cfg.get("template"):
+            template_instructions['preferred_template'] = pr_cfg["template"]
+
         result = {
             'repository': repo_path,
             'base_branch': base_branch,
@@ -255,16 +289,8 @@ async def get_pr_context(
             'diff': paginated['diff_chunk'],
             'next_cursor': paginated['next_cursor'],
             'pagination_info': paginated['chunk_info'],
-            'template_instructions': {
-                'templates_directory': '.devnarrate/pr-templates/',
-                'default_template_available': True,
-                'steps': [
-                    '1. Check if .devnarrate/pr-templates/ exists',
-                    '2. If yes, list templates and ask user which to use',
-                    '3. Read chosen template or use DEFAULT_PR_TEMPLATE',
-                    '4. Fill template with analysis of commits and diff'
-                ]
-            }
+            'template_instructions': template_instructions,
+            'draft_by_default': pr_cfg.get("draft_by_default", False),
         }
 
         return json.dumps(result, indent=2)
@@ -422,6 +448,10 @@ async def review_changes(
             else:
                 return json.dumps({'error': 'No repository path provided and no roots available'})
 
+        # Load project config
+        cfg = config_module.load_config(repo_path)
+        review_cfg = cfg["review"]
+
         # Get diff based on scope
         if scope == "staged":
             diff_output = git_operations.get_diff(repo_path)
@@ -457,6 +487,7 @@ async def review_changes(
             'diff': paginated['diff_chunk'],
             'next_cursor': paginated['next_cursor'],
             'pagination_info': paginated['chunk_info'],
+            'large_change_threshold': review_cfg.get("large_change_threshold", 50),
         }
 
         if untracked:
