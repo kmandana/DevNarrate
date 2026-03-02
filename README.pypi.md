@@ -86,24 +86,9 @@ Secret scanning runs automatically when you ask for a commit message. DevNarrate
 2. Choose a template if you have custom ones in `.devnarrate/pr-templates/`
 3. Review the generated PR description and approve to let DevNarrate call `gh` or `glab`
 
-Example template (`.devnarrate/pr-templates/feature.md`):
+### Configuration
 
-```markdown
-## Summary
-[What does this PR do?]
-
-## Changes
--
--
-
-## Testing
-[How to test]
-
-## Related Issues
-[Links]
-```
-
-If no custom template exists, DevNarrate uses a sensible default.
+DevNarrate ships a fully commented [`.devnarrate/config.toml`](https://github.com/kmandana/DevNarrate/blob/main/.devnarrate/config.toml) with all available settings and their defaults. Copy it into your repo and edit the values you care about — every option is documented inline.
 
 ### Platform Requirements
 

@@ -116,6 +116,12 @@ SAFE_VALUE = "not-a-real-secret"  # pragma: allowlist secret
 2. Claude analyzes the diff and offers template options (custom templates live in `.devnarrate/pr-templates/`)
 3. Review the generated description and approve to let Claude create the PR via `gh` or `glab`
 
+### Configuration (Optional)
+
+DevNarrate ships a fully commented config file at [`.devnarrate/config.toml`](.devnarrate/config.toml). Copy it into your repo root and edit the values you care about — every setting documents its purpose and default inline.
+
+All settings are optional — delete or comment out any line to use the default.
+
 ### PR Templates (Optional)
 
 ```bash
