@@ -15,7 +15,7 @@ authors = [
 maintainers = [
     {name = "K Man"}
 ]
-keywords = ["git", "commit", "pr", "ai", "mcp", "claude", "secrets", "security", "developer-tools"]
+keywords = ["git", "commit", "pr", "ai", "mcp", "secrets", "security", "developer-tools"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",

@@ -64,7 +64,7 @@ git add <file1> <file2>
 git add -u
 ```
 
-Then ask Claude (or Cursor):
+Then ask your AI assistant:
 
 ```
 Generate a commit message for my changes
@@ -82,7 +82,7 @@ Secret scanning runs automatically when you ask for a commit message. DevNarrate
 
 ### PR Descriptions
 
-1. Ask Claude: "Create a PR to main from my current branch"
+1. Ask your AI assistant: "Create a PR to main from my current branch"
 2. Choose a template if you have custom ones in `.devnarrate/pr-templates/`
 3. Review the generated PR description and approve to let DevNarrate call `gh` or `glab`
 
