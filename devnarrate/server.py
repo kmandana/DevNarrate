@@ -74,7 +74,7 @@ async def get_commit_context(
     Args:
         cursor: Pagination cursor for large diffs (optional, returned as next_cursor)
         max_diff_tokens: Maximum tokens per response (default: 20000, safe under 25k limit)
-        repo_path: Path to git repository (optional, defaults to Claude's working directory)
+        repo_path: Path to git repository (optional, defaults to the AI assistant's working directory)
 
     Returns:
         JSON string with:
@@ -180,7 +180,7 @@ async def commit_changes(
     Args:
         message: User-approved commit message (should follow 50/72 rule)
         user_approved: REQUIRED - Must be True. Confirms user has seen and approved the commit message.
-        repo_path: Path to git repository (optional, defaults to Claude's working directory)
+        repo_path: Path to git repository (optional, defaults to the AI assistant's working directory)
 
     Returns:
         Success message with commit hash or error
@@ -226,7 +226,7 @@ async def get_pr_context(
         head_branch: Head branch (defaults to current branch)
         cursor: Pagination cursor for large diffs (optional, returned as next_cursor)
         max_diff_tokens: Maximum tokens per diff chunk (default: 12000, leaves room for commits/files in 25k limit)
-        repo_path: Path to git repository (optional, defaults to Claude's working directory)
+        repo_path: Path to git repository (optional, defaults to the AI assistant's working directory)
 
     Returns:
         JSON string with commits, files, diff chunk, and pagination info
@@ -329,7 +329,7 @@ async def create_pr(
         user_approved: REQUIRED - Must be True. Confirms user has seen and approved the PR content.
         head_branch: Head branch (defaults to current branch)
         draft: Create as draft PR (default: False)
-        repo_path: Path to git repository (optional, defaults to Claude's working directory)
+        repo_path: Path to git repository (optional, defaults to the AI assistant's working directory)
 
     Returns:
         Success message with PR URL or error message
