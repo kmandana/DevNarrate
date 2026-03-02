@@ -14,24 +14,61 @@ from typing import Any, Optional
 
 DEFAULTS: dict[str, Any] = {
     "commit": {
+        # Allowed conventional-commit type prefixes.
+        # The AI will only suggest these types when generating commit messages.
+        # Example: ["feat", "fix", "hotfix", "release"]
         "types": ["feat", "fix", "docs", "style", "refactor", "test", "chore"],
+
+        # Maximum character length for the commit subject line (first line).
+        # Standard convention is 50; GitHub truncates subjects longer than 72.
         "max_subject_length": 50,
+
+        # Maximum character length per line in the commit body.
+        # Standard convention is 72 for readability in terminals and git log.
         "max_body_line_length": 72,
+
+        # When true, the AI will use type(scope): format instead of type: format.
+        # e.g. "feat(auth): add login" instead of "feat: add login".
         "require_scope": False,
     },
     "secrets": {
+        # Master switch for secret scanning. Set to false to skip scanning entirely.
+        # The commit context response will indicate scanning was disabled.
         "enabled": True,
+
+        # Maximum number of secret findings returned per scan.
+        # Prevents flooding the MCP response when a diff has many issues.
+        # Findings beyond this cap are still counted in total_findings.
         "max_findings": 20,
+
+        # Additional regex patterns to scan for, beyond the 25+ built-in detectors.
+        # Each entry needs "name" (display label) and "pattern" (regex string).
+        # Custom patterns take priority: if they match a line already flagged by
+        # a built-in detector, the custom name replaces the generic detector name.
+        #
+        # Example in config.toml:
+        #   [[secrets.custom_patterns]]
+        #   name = "Internal API Key"
+        #   pattern = "MYCO-[A-Za-z0-9]{32}"
         "custom_patterns": [],
-        # Example custom_patterns entry:
-        # { "name": "Internal API Key", "pattern": "MYCO-[A-Za-z0-9]{32}" }
     },
     "pr": {
+        # Branch to compare against when generating PR descriptions.
+        # Used as the default base_branch hint in get_pr_context output.
         "default_base_branch": "main",
+
+        # When true, create_pr will default to opening draft PRs.
         "draft_by_default": False,
-        "template": "",  # relative path within .devnarrate/pr-templates/
+
+        # Preferred template filename within .devnarrate/pr-templates/.
+        # If set, the AI will use this template without asking.
+        # Leave empty to let the AI list available templates and ask the user.
+        "template": "",
     },
     "review": {
+        # Number of added lines at which review_changes flags a file as a
+        # "large change" deserving extra attention in the review summary.
+        # Lower = stricter reviews, higher = quieter for repos with big diffs.
         "large_change_threshold": 50,
     },
 }
