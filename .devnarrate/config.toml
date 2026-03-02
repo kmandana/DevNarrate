@@ -23,6 +23,12 @@ max_body_line_length = 72
 # Default: false
 require_scope = false
 
+# When the number of staged files meets or exceeds this threshold,
+# get_commit_context will suggest splitting into multiple commits.
+# Set to 0 to disable split suggestions entirely.
+# Default: 4
+split_threshold = 4
+
 # ── Secret scanning settings ────────────────────────────────────
 [secrets]
 # Master switch for secret scanning. Set to false to skip scanning entirely.
