@@ -123,7 +123,56 @@ def _redact_value(value: str, show_chars: int = 4) -> str:
     return value[:show_chars] + "...XXXX"
 
 
-def scan_diff(diff_text: str) -> dict:
+def _build_custom_regex_findings(
+    parsed_files: dict[str, list[tuple[int, str]]],
+    custom_patterns: list[dict],
+) -> list[dict]:
+    """Scan added lines against user-defined regex patterns from config.
+
+    Args:
+        parsed_files: Dict mapping file paths to lists of (line_number, line_content).
+        custom_patterns: List of {"name": str, "pattern": str} dicts.
+
+    Returns:
+        List of finding dicts matching the standard format.
+    """
+    findings = []
+    compiled = []
+    for pat in custom_patterns:
+        name = pat.get("name", "Custom Pattern")
+        regex_str = pat.get("pattern", "")
+        if not regex_str:
+            continue
+        try:
+            compiled.append((name, re.compile(regex_str)))
+        except re.error:
+            continue
+
+    if not compiled:
+        return findings
+
+    for filepath, lines in parsed_files.items():
+        for real_line_no, line_content in lines:
+            for name, regex in compiled:
+                if regex.search(line_content):
+                    findings.append({
+                        "file": filepath,
+                        "line": real_line_no,
+                        "type": name,
+                        "match_preview": _redact_value(
+                            regex.search(line_content).group(0)
+                        ),
+                    })
+                    break  # one match per line is enough
+
+    return findings
+
+
+def scan_diff(
+    diff_text: str,
+    max_findings: Optional[int] = None,
+    custom_patterns: Optional[list[dict]] = None,
+) -> dict:
     """Scan added lines in a staged diff for potential secrets.
 
     Uses detect-secrets with 27 detectors including:
@@ -136,14 +185,20 @@ def scan_diff(diff_text: str) -> dict:
 
     Args:
         diff_text: Raw `git diff --staged` output
+        max_findings: Cap on returned findings (default: MAX_FINDINGS).
+                      Configurable via .devnarrate/config.toml [secrets] max_findings.
+        custom_patterns: Extra regex patterns from config, each a dict with
+                         "name" and "pattern" keys.
 
     Returns:
         Dict with:
         - status: "clean" or "warnings_found"
-        - findings: list of detected secrets (capped at MAX_FINDINGS)
+        - findings: list of detected secrets (capped at max_findings)
         - total_findings: total count before capping
         - message: human-readable summary
     """
+    cap = max_findings if max_findings is not None else MAX_FINDINGS
+
     if not diff_text or not diff_text.strip():
         return {
             "status": "clean",
@@ -213,8 +268,25 @@ def scan_diff(diff_text: str) -> dict:
                 except OSError:
                     pass
 
+    # Run custom pattern matching if configured
+    # Custom patterns take priority: if they match a line already flagged by a
+    # built-in detector, replace the built-in finding with the custom one
+    # (the user-defined name is more informative than a generic detector name).
+    if custom_patterns:
+        custom_findings = _build_custom_regex_findings(parsed_files, custom_patterns)
+        for finding in custom_findings:
+            loc = (finding["file"], finding["line"])
+            if loc in seen_locations:
+                # Replace built-in finding with custom one
+                all_findings = [
+                    f for f in all_findings
+                    if (f["file"], f["line"]) != loc
+                ]
+            seen_locations.add(loc)
+            all_findings.append(finding)
+
     total = len(all_findings)
-    capped = all_findings[:MAX_FINDINGS]
+    capped = all_findings[:cap]
 
     if total == 0:
         return {
@@ -225,8 +297,8 @@ def scan_diff(diff_text: str) -> dict:
         }
 
     message = f"{total} potential secret{'s' if total > 1 else ''} detected in staged changes. Review before committing."
-    if total > MAX_FINDINGS:
-        message += f" (showing first {MAX_FINDINGS} of {total})"
+    if total > cap:
+        message += f" (showing first {cap} of {total})"
 
     return {
         "status": "warnings_found",
