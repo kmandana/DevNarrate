@@ -86,24 +86,34 @@ Secret scanning runs automatically when you ask for a commit message. DevNarrate
 2. Choose a template if you have custom ones in `.devnarrate/pr-templates/`
 3. Review the generated PR description and approve to let DevNarrate call `gh` or `glab`
 
-Example template (`.devnarrate/pr-templates/feature.md`):
+### Configuration
 
-```markdown
-## Summary
-[What does this PR do?]
+Drop a `.devnarrate/config.toml` in your repo root to customize behavior:
 
-## Changes
--
--
+```toml
+[commit]
+types = ["feat", "fix", "hotfix"]  # allowed commit type prefixes
+max_subject_length = 60            # subject line character limit
+require_scope = true               # enforce type(scope): format
 
-## Testing
-[How to test]
+[secrets]
+enabled = true                     # master switch for secret scanning
+max_findings = 10                  # cap findings per scan
 
-## Related Issues
-[Links]
+[[secrets.custom_patterns]]        # add your own regex detectors
+name = "Internal API Key"
+pattern = "MYCO-[A-Za-z0-9]{32}"
+
+[pr]
+default_base_branch = "develop"    # base branch for PR diffs
+draft_by_default = true            # always open draft PRs
+template = "feature.md"            # preferred template in .devnarrate/pr-templates/
+
+[review]
+large_change_threshold = 25        # lines added to flag as "large change"
 ```
 
-If no custom template exists, DevNarrate uses a sensible default.
+All settings are optional — omit any key to use the defaults. See the [full reference](https://github.com/kmandana/DevNarrate#configuration-optional) in the GitHub README.
 
 ### Platform Requirements
 
