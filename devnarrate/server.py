@@ -66,7 +66,23 @@ async def get_commit_context(
        - Comments containing passwords or access instructions
        If you spot anything suspicious, warn the user before proceeding.
 
-    3. COMMIT MESSAGE: After confirming no secrets (or user acknowledgment), generate
+    3. SPLIT CHECK: Look at the split_suggestion field in the response.
+       - If split_suggestion.suggested is True, the staged changes touch enough
+         files that they MAY benefit from being split into multiple commits.
+         Review the per-file metadata in split_suggestion.per_file_stats and the
+         diff to decide whether the changes are logically cohesive or not.
+         - If changes span MULTIPLE unrelated concerns (e.g., a feature + a
+           refactor + doc updates), SUGGEST splitting. Present a plan:
+           group files by purpose, suggest a commit message per group, and ask
+           the user: "These changes touch N files across different concerns.
+           Want me to split them into separate commits, or commit everything
+           together?"
+         - If changes are all part of ONE logical change (even if many files),
+           just write a single commit message as normal.
+       - If split_suggestion.suggested is False (or absent), proceed normally.
+       - To execute a split, call execute_split_commit for each group.
+
+    4. COMMIT MESSAGE: After confirming no secrets (or user acknowledgment), generate
        a commit message following:
        - 50/72 rule: 50 char subject line, 72 char body lines
        - Conventional commits format: type(scope): description
@@ -86,6 +102,7 @@ async def get_commit_context(
         - next_cursor: pagination cursor for next chunk (if any)
         - pagination_info: token counts and chunk info
         - commit_format_guide: formatting rules for commit messages
+        - split_suggestion: (when applicable) per-file stats and splitting hints
     """
     try:
         # Get working directory from MCP roots if repo_path not provided
@@ -102,9 +119,6 @@ async def get_commit_context(
         commit_cfg = cfg["commit"]
         secrets_cfg = cfg["secrets"]
 
-        # Get file stats (staged changes only)
-        stats = git_operations.get_file_stats(repo_path)
-
         # Get full diff (staged changes only)
         diff_output = git_operations.get_diff(repo_path)
 
@@ -114,6 +128,12 @@ async def get_commit_context(
         # Check if there are any changes - trust the diff as source of truth
         # If git diff --staged is empty, there's nothing to commit
         has_changes = bool(diff_output.strip())
+
+        # Get per-file diffs (provides both file list and split analysis data)
+        per_file = git_operations.get_per_file_diffs(repo_path) if has_changes else []
+
+        # Build file list (backward-compatible with previous format)
+        files = [{'path': f['path'], 'status': f['status']} for f in per_file]
 
         # Scan for secrets in added lines (only on first page, not paginated follow-ups)
         if has_changes and cursor is None and secrets_cfg.get("enabled", True):
@@ -138,7 +158,7 @@ async def get_commit_context(
         result = {
             'repository': repo_path,
             'has_changes': has_changes,
-            'files': stats['files'],
+            'files': files,
             'secret_scan': secret_scan,
             'diff': paginated['diff_chunk'],
             'next_cursor': paginated['next_cursor'],
@@ -152,6 +172,37 @@ async def get_commit_context(
                 'important': 'DO NOT include AI signatures, attribution, or "Generated with" footers in the commit message'
             }
         }
+
+        # Split suggestion: include per-file stats when file count meets threshold
+        split_threshold = commit_cfg.get("split_threshold", 4)
+        if has_changes and split_threshold > 0 and len(per_file) >= split_threshold:
+            result['split_suggestion'] = {
+                'suggested': True,
+                'file_count': len(per_file),
+                'threshold': split_threshold,
+                'per_file_stats': [
+                    {
+                        'path': f['path'],
+                        'status': f['status'],
+                        'lines_added': f['lines_added'],
+                        'lines_removed': f['lines_removed'],
+                    }
+                    for f in per_file
+                ],
+                'instructions': (
+                    'The staged changes touch multiple files. Review the diff to '
+                    'decide whether they represent ONE logical change or MULTIPLE '
+                    'unrelated concerns. If multiple, suggest splitting into groups '
+                    'and use execute_split_commit for each group after user approval.'
+                ),
+                'grouping_hints': [
+                    'Keep related code and its tests together',
+                    'Separate refactoring from feature changes',
+                    'Documentation changes can be their own commit',
+                    'Config/dependency changes can be their own commit',
+                    'Files that must work together should be in the same commit',
+                ],
+            }
 
         return json.dumps(result, indent=2)
 
@@ -501,155 +552,6 @@ async def review_changes(
 
 
 @mcp.tool()
-async def get_split_context(
-    cursor: Optional[str] = None,
-    max_diff_tokens: int = 20000,
-    repo_path: Optional[str] = None
-) -> str:
-    """REQUIRED FIRST STEP: Analyze staged changes at per-file granularity for splitting into logical commits.
-
-    WHEN TO CALL: When the user has staged many changes and wants to split them
-    into multiple smaller, logical commits instead of one big commit.
-
-    This tool returns per-file diffs so you can suggest groupings. Each file's
-    diff is separate, making it easy to see what belongs together.
-
-    IMPORTANT: This tool ONLY works with STAGED changes. The user must stage
-    their changes first (git add).
-
-    CRITICAL: If there are fewer than 2 staged files, splitting is not useful.
-    Tell the user: "Only N file(s) staged — nothing to split. Use get_commit_context
-    for a single commit instead."
-
-    HOW TO PRESENT THE RESPONSE — follow these steps:
-
-    1. REVIEW the per-file diffs to understand what each file does.
-
-    2. SUGGEST GROUPS: Organize files into logical commit groups based on:
-       - Related functionality (e.g., feature code + its tests)
-       - Type of change (e.g., refactoring vs new feature vs docs)
-       - Directory structure (e.g., frontend vs backend)
-       - Dependencies (files that must be committed together to avoid breakage)
-       Present each group with:
-       - A suggested conventional commit message
-       - The list of files in the group
-       - A brief rationale for the grouping
-
-    3. ASK FOR APPROVAL: Show the split plan and ask:
-       "Should I commit these N groups in this order? You can adjust the
-       grouping or messages before I proceed."
-
-    4. EXECUTE: After approval, call execute_split_commit for each group
-       in order. Wait for each to succeed before proceeding to the next.
-
-    Args:
-        cursor: Pagination cursor for large diffs (optional)
-        max_diff_tokens: Maximum tokens per response (default: 20000)
-        repo_path: Path to git repository (optional, defaults to MCP roots)
-
-    Returns:
-        JSON string with:
-        - has_changes: boolean
-        - file_count: number of staged files
-        - files: list of per-file diffs with path, status, lines_added, lines_removed, diff
-        - secret_scan: results of secret detection on the full staged diff
-        - commit_format_guide: formatting rules for commit messages
-    """
-    try:
-        if repo_path is None:
-            context = mcp.get_context()
-            roots_result = await context.session.list_roots()
-            if roots_result.roots:
-                repo_path = roots_result.roots[0].uri.path
-            else:
-                return json.dumps({'error': 'No repository path provided and no roots available'})
-
-        cfg = config_module.load_config(repo_path)
-        commit_cfg = cfg["commit"]
-        secrets_cfg = cfg["secrets"]
-
-        # Get per-file diffs for all staged files
-        per_file = git_operations.get_per_file_diffs(repo_path)
-
-        has_changes = len(per_file) > 0
-
-        # Scan the full staged diff for secrets (only on first page)
-        if has_changes and cursor is None and secrets_cfg.get("enabled", True):
-            full_diff = git_operations.get_diff(repo_path)
-            secret_scan = secret_scanner.scan_diff(
-                full_diff,
-                max_findings=secrets_cfg.get("max_findings"),
-                custom_patterns=secrets_cfg.get("custom_patterns"),
-            )
-        else:
-            reason = 'No changes to scan.'
-            if has_changes and cursor is not None:
-                reason = 'Secret scan performed on first page only.'
-            elif has_changes and not secrets_cfg.get("enabled", True):
-                reason = 'Secret scanning disabled in .devnarrate/config.toml.'
-            secret_scan = {
-                'status': 'clean',
-                'findings': [],
-                'total_findings': 0,
-                'message': reason,
-            }
-
-        # Paginate per-file diffs: concatenate all file diffs and paginate
-        # But also provide structured per-file metadata
-        all_diffs = '\n'.join(f['diff'] for f in per_file if f['diff'])
-        paginated = git_operations.paginate_diff(all_diffs, cursor, max_diff_tokens)
-
-        # Build file metadata (without the full diff text to save tokens)
-        file_metadata = []
-        for f in per_file:
-            file_metadata.append({
-                'path': f['path'],
-                'status': f['status'],
-                'lines_added': f['lines_added'],
-                'lines_removed': f['lines_removed'],
-            })
-
-        result = {
-            'repository': repo_path,
-            'has_changes': has_changes,
-            'file_count': len(per_file),
-            'files': file_metadata,
-            'secret_scan': secret_scan,
-            'diff': paginated['diff_chunk'],
-            'next_cursor': paginated['next_cursor'],
-            'pagination_info': paginated['chunk_info'],
-            'commit_format_guide': {
-                'subject_line': f'Max {commit_cfg["max_subject_length"]} characters',
-                'body_line_length': f'Max {commit_cfg["max_body_line_length"]} characters per line',
-                'format': 'type(scope): description\\n\\nBody paragraphs...\\n\\nFooter',
-                'types': commit_cfg["types"],
-                'require_scope': commit_cfg.get("require_scope", False),
-                'important': 'DO NOT include AI signatures, attribution, or "Generated with" footers in the commit message'
-            },
-            'split_instructions': {
-                'workflow': [
-                    '1. Review per-file diffs to understand each change',
-                    '2. Group files by logical purpose (feature, fix, docs, etc.)',
-                    '3. Present the split plan with commit messages to the user',
-                    '4. After approval, call execute_split_commit for each group in order',
-                ],
-                'grouping_hints': [
-                    'Keep related code and its tests together',
-                    'Separate refactoring from feature changes',
-                    'Documentation changes can be their own commit',
-                    'Config/dependency changes can be their own commit',
-                    'Files that must work together should be in the same commit',
-                ],
-            },
-        }
-
-        return json.dumps(result, indent=2)
-
-    except Exception as e:
-        return json.dumps({'error': str(e)})
-
-
-@mcp.tool()
 async def execute_split_commit(
     files: list[str],
     message: str,
@@ -659,7 +561,8 @@ async def execute_split_commit(
     """Execute one commit in a split-commit workflow, committing only the specified files.
 
     CRITICAL WORKFLOW — YOU MUST FOLLOW THESE STEPS:
-    1. Call get_split_context first to analyze all staged changes
+    1. Call get_commit_context first — it will include a split_suggestion when
+       staged changes span multiple files/concerns
     2. Present the full split plan (all groups with messages) to the user
     3. Get user approval for the ENTIRE plan before executing ANY commits
     4. Call this tool once per group, IN ORDER, with user_approved=True

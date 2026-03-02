@@ -1,11 +1,10 @@
 """Tests for devnarrate.server — MCP tool integration tests.
 
 These tests verify the MCP tools end-to-end:
-- get_commit_context returns proper JSON with secret_scan
+- get_commit_context returns proper JSON with secret_scan and split suggestions
 - commit_changes requires user_approved=True
 - get_pr_context returns correct branch info
 - create_pr requires user_approved=True
-- get_split_context returns per-file diffs for split commits
 - execute_split_commit commits file subsets correctly
 """
 
@@ -395,30 +394,38 @@ class TestCreatePr:
 
 
 # ──────────────────────────────────
-# Tests for get_split_context
+# Tests for split suggestion in get_commit_context
 # ──────────────────────────────────
 
 
-class TestGetSplitContext:
-    """Integration tests for the get_split_context MCP tool."""
+class TestCommitContextSplitSuggestion:
+    """Tests for the split_suggestion field returned by get_commit_context."""
 
     @pytest.mark.asyncio
-    async def test_no_staged_changes(self, tmp_git_repo):
-        """Empty staging area → has_changes=False."""
+    async def test_no_split_suggestion_below_threshold(self, tmp_git_repo):
+        """Fewer files than threshold → no split_suggestion in response."""
+        # Default threshold is 4, stage only 2 files
+        (tmp_git_repo / "a.py").write_text("a = 1\n")
+        (tmp_git_repo / "b.py").write_text("b = 2\n")
+        subprocess.run(
+            ["git", "add", "a.py", "b.py"],
+            cwd=tmp_git_repo, capture_output=True, check=True,
+        )
         async with create_session(
             devnarrate_mcp,
             list_roots_callback=_roots_callback(str(tmp_git_repo)),
         ) as client:
-            result = await client.call_tool("get_split_context", {})
+            result = await client.call_tool("get_commit_context", {})
             data = json.loads(result.content[0].text)
-            assert data["has_changes"] is False
-            assert data["file_count"] == 0
+            assert data["has_changes"] is True
+            assert "split_suggestion" not in data
 
     @pytest.mark.asyncio
-    async def test_returns_per_file_metadata(self, tmp_git_repo):
-        """Multiple staged files return per-file metadata."""
-        for name in ["feat.py", "test_feat.py", "docs.md"]:
-            (tmp_git_repo / name).write_text(f"# {name}\ncontents\n")
+    async def test_split_suggestion_at_threshold(self, tmp_git_repo):
+        """Exactly threshold files → split_suggestion included."""
+        # Default threshold is 4
+        for name in ["a.py", "b.py", "c.py", "d.py"]:
+            (tmp_git_repo / name).write_text(f"# {name}\n")
             subprocess.run(
                 ["git", "add", name],
                 cwd=tmp_git_repo, capture_output=True, check=True,
@@ -427,86 +434,64 @@ class TestGetSplitContext:
             devnarrate_mcp,
             list_roots_callback=_roots_callback(str(tmp_git_repo)),
         ) as client:
-            result = await client.call_tool("get_split_context", {})
+            result = await client.call_tool("get_commit_context", {})
             data = json.loads(result.content[0].text)
-            assert data["has_changes"] is True
-            assert data["file_count"] == 3
-            paths = {f["path"] for f in data["files"]}
-            assert paths == {"feat.py", "test_feat.py", "docs.md"}
+            assert "split_suggestion" in data
+            assert data["split_suggestion"]["suggested"] is True
+            assert data["split_suggestion"]["file_count"] == 4
 
     @pytest.mark.asyncio
-    async def test_includes_secret_scan(self, tmp_git_repo):
-        """Secret scan runs on the full staged diff."""
-        f = tmp_git_repo / "clean.py"
-        f.write_text("x = 1\n")
-        subprocess.run(
-            ["git", "add", "clean.py"],
-            cwd=tmp_git_repo, capture_output=True, check=True,
-        )
+    async def test_split_suggestion_has_per_file_stats(self, tmp_git_repo):
+        """split_suggestion includes per-file line counts."""
+        for name in ["feat.py", "test_feat.py", "docs.md", "config.toml"]:
+            (tmp_git_repo / name).write_text(f"# {name}\nline2\nline3\n")
+            subprocess.run(
+                ["git", "add", name],
+                cwd=tmp_git_repo, capture_output=True, check=True,
+            )
         async with create_session(
             devnarrate_mcp,
             list_roots_callback=_roots_callback(str(tmp_git_repo)),
         ) as client:
-            result = await client.call_tool("get_split_context", {})
+            result = await client.call_tool("get_commit_context", {})
             data = json.loads(result.content[0].text)
-            assert "secret_scan" in data
-            assert data["secret_scan"]["status"] == "clean"
+            stats = data["split_suggestion"]["per_file_stats"]
+            assert len(stats) == 4
+            for stat in stats:
+                assert "path" in stat
+                assert "lines_added" in stat
+                assert "lines_removed" in stat
+                assert stat["lines_added"] >= 3
 
     @pytest.mark.asyncio
-    async def test_includes_commit_format_guide(self, tmp_git_repo):
-        """Response includes the commit format guide."""
-        f = tmp_git_repo / "guide.py"
-        f.write_text("pass\n")
-        subprocess.run(
-            ["git", "add", "guide.py"],
-            cwd=tmp_git_repo, capture_output=True, check=True,
-        )
+    async def test_split_suggestion_includes_grouping_hints(self, tmp_git_repo):
+        """split_suggestion includes hints for grouping files."""
+        for name in ["a.py", "b.py", "c.py", "d.py"]:
+            (tmp_git_repo / name).write_text(f"# {name}\n")
+            subprocess.run(
+                ["git", "add", name],
+                cwd=tmp_git_repo, capture_output=True, check=True,
+            )
         async with create_session(
             devnarrate_mcp,
             list_roots_callback=_roots_callback(str(tmp_git_repo)),
         ) as client:
-            result = await client.call_tool("get_split_context", {})
+            result = await client.call_tool("get_commit_context", {})
             data = json.loads(result.content[0].text)
-            assert "commit_format_guide" in data
-            assert "split_instructions" in data
+            assert "grouping_hints" in data["split_suggestion"]
+            assert len(data["split_suggestion"]["grouping_hints"]) > 0
 
     @pytest.mark.asyncio
-    async def test_diff_contains_all_files(self, tmp_git_repo):
-        """The diff field contains content from all staged files."""
-        (tmp_git_repo / "alpha.py").write_text("alpha = 1\n")
-        (tmp_git_repo / "beta.py").write_text("beta = 2\n")
-        subprocess.run(
-            ["git", "add", "alpha.py", "beta.py"],
-            cwd=tmp_git_repo, capture_output=True, check=True,
-        )
+    async def test_no_split_suggestion_when_no_changes(self, tmp_git_repo):
+        """No staged changes → no split_suggestion."""
         async with create_session(
             devnarrate_mcp,
             list_roots_callback=_roots_callback(str(tmp_git_repo)),
         ) as client:
-            result = await client.call_tool("get_split_context", {})
+            result = await client.call_tool("get_commit_context", {})
             data = json.loads(result.content[0].text)
-            assert "alpha" in data["diff"]
-            assert "beta" in data["diff"]
-
-    @pytest.mark.asyncio
-    async def test_file_metadata_has_line_counts(self, tmp_git_repo):
-        """Per-file metadata includes lines_added and lines_removed."""
-        f = tmp_git_repo / "counted.py"
-        f.write_text("line1\nline2\nline3\n")
-        subprocess.run(
-            ["git", "add", "counted.py"],
-            cwd=tmp_git_repo, capture_output=True, check=True,
-        )
-        async with create_session(
-            devnarrate_mcp,
-            list_roots_callback=_roots_callback(str(tmp_git_repo)),
-        ) as client:
-            result = await client.call_tool("get_split_context", {})
-            data = json.loads(result.content[0].text)
-            file_info = data["files"][0]
-            assert "lines_added" in file_info
-            assert "lines_removed" in file_info
-            assert file_info["lines_added"] >= 3
+            assert data["has_changes"] is False
+            assert "split_suggestion" not in data
 
 
 # ──────────────────────────────────
