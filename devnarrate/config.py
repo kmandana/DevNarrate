@@ -30,6 +30,11 @@ DEFAULTS: dict[str, Any] = {
         # When true, the AI will use type(scope): format instead of type: format.
         # e.g. "feat(auth): add login" instead of "feat: add login".
         "require_scope": False,
+
+        # When the number of staged files meets or exceeds this threshold,
+        # get_commit_context will suggest splitting into multiple commits.
+        # Set to 0 to disable split suggestions entirely.
+        "split_threshold": 4,
     },
     "secrets": {
         # Master switch for secret scanning. Set to false to skip scanning entirely.
