@@ -453,6 +453,113 @@ def get_working_file_stats(repo_path: str) -> dict:
     return {'files': files}
 
 
+def get_per_file_diffs(repo_path: str) -> list[dict]:
+    """Get staged diff for each file separately.
+
+    Returns a list of per-file diffs so the caller can present
+    file-level groupings for split-commit workflows.
+
+    Args:
+        repo_path: Path to the git repository
+
+    Returns:
+        List of dicts, each with:
+        - path: file path
+        - status: added/modified/deleted/renamed
+        - diff: the diff text for this file only
+        - lines_added: number of added lines
+        - lines_removed: number of removed lines
+    """
+    stats = get_file_stats(repo_path)
+    results = []
+
+    for file_info in stats['files']:
+        filepath = file_info['path']
+        # Get diff for this specific file
+        try:
+            diff_result = subprocess.run(
+                ['git', 'diff', '--staged', '--', filepath],
+                cwd=repo_path,
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            file_diff = diff_result.stdout
+
+            # Count added/removed lines from diff
+            lines_added = 0
+            lines_removed = 0
+            for line in file_diff.split('\n'):
+                if line.startswith('+') and not line.startswith('+++'):
+                    lines_added += 1
+                elif line.startswith('-') and not line.startswith('---'):
+                    lines_removed += 1
+
+        except subprocess.CalledProcessError:
+            file_diff = ''
+            lines_added = 0
+            lines_removed = 0
+
+        results.append({
+            'path': filepath,
+            'status': file_info['status'],
+            'diff': file_diff,
+            'lines_added': lines_added,
+            'lines_removed': lines_removed,
+        })
+
+    return results
+
+
+def unstage_files(repo_path: str, files: list[str]) -> None:
+    """Unstage specific files from the staging area.
+
+    Uses 'git reset HEAD -- <files>' to move files from staged back
+    to the working tree without discarding changes.
+
+    Args:
+        repo_path: Path to the git repository
+        files: List of file paths to unstage
+
+    Raises:
+        subprocess.CalledProcessError: If git command fails
+        ValueError: If files list is empty
+    """
+    if not files:
+        raise ValueError("files list must not be empty")
+
+    subprocess.run(
+        ['git', 'reset', 'HEAD', '--'] + files,
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+        check=True
+    )
+
+
+def stage_files(repo_path: str, files: list[str]) -> None:
+    """Stage specific files.
+
+    Args:
+        repo_path: Path to the git repository
+        files: List of file paths to stage
+
+    Raises:
+        subprocess.CalledProcessError: If git command fails
+        ValueError: If files list is empty
+    """
+    if not files:
+        raise ValueError("files list must not be empty")
+
+    subprocess.run(
+        ['git', 'add', '--'] + files,
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+        check=True
+    )
+
+
 def detect_git_platform(repo_path: str) -> str:
     """Detect git platform from remote URL.
 
