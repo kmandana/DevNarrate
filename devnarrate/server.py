@@ -11,6 +11,7 @@ An MCP server that helps developers with:
 """
 
 import json
+import re
 import subprocess
 from typing import Optional
 
@@ -627,25 +628,38 @@ async def execute_split_commit(
 
         # Files to unstage = all staged files NOT in this commit
         files_to_unstage = [f for f in staged_paths if f not in files]
+        unstaged_successfully = False
 
-        # Unstage everything except our target files
-        if files_to_unstage:
-            git_operations.unstage_files(repo_path, files_to_unstage)
-
-        # Commit the remaining staged files (our target files)
         try:
-            commit_result = git_operations.execute_commit(repo_path, message)
-        except Exception as commit_err:
-            # Re-stage the files we unstaged to restore original state
+            # Unstage everything except our target files
             if files_to_unstage:
-                git_operations.stage_files(repo_path, files_to_unstage)
+                git_operations.unstage_files(repo_path, files_to_unstage)
+            unstaged_successfully = True
+
+            # Commit the remaining staged files (our target files)
+            commit_result = git_operations.execute_commit(repo_path, message)
+        except Exception as err:
+            # Re-stage the files we unstaged to restore original state
+            if unstaged_successfully and files_to_unstage:
+                try:
+                    git_operations.stage_files(repo_path, files_to_unstage)
+                except Exception:
+                    return json.dumps({
+                        'success': False,
+                        'error': (
+                            f'Operation failed ({err}) and rollback also failed. '
+                            f'Staging area may be inconsistent. '
+                            f'Run "git add {" ".join(files_to_unstage)}" to restore.'
+                        ),
+                    })
             return json.dumps({
                 'success': False,
-                'error': f'Commit failed: {commit_err}. Original staging restored.',
+                'error': f'Commit failed: {err}. Original staging restored.',
             })
 
-        # Extract commit hash from result
-        commit_hash = commit_result.split()[3] if 'Successfully' in commit_result else 'unknown'
+        # Extract commit hash from result using regex (reliable)
+        hash_match = re.search(r'\b([0-9a-f]{7,})\b', commit_result)
+        commit_hash = hash_match.group(1) if hash_match else 'unknown'
 
         return json.dumps({
             'success': True,
