@@ -5,6 +5,8 @@ These tests verify the MCP tools end-to-end:
 - commit_changes requires user_approved=True
 - get_pr_context returns correct branch info
 - create_pr requires user_approved=True
+- get_split_context returns per-file diffs for split commits
+- execute_split_commit commits file subsets correctly
 """
 
 import json
@@ -390,3 +392,263 @@ class TestCreatePr:
             )
             text = result.content[0].text
             assert "Error" in text or "user_approved" in text
+
+
+# ──────────────────────────────────
+# Tests for get_split_context
+# ──────────────────────────────────
+
+
+class TestGetSplitContext:
+    """Integration tests for the get_split_context MCP tool."""
+
+    @pytest.mark.asyncio
+    async def test_no_staged_changes(self, tmp_git_repo):
+        """Empty staging area → has_changes=False."""
+        async with create_session(
+            devnarrate_mcp,
+            list_roots_callback=_roots_callback(str(tmp_git_repo)),
+        ) as client:
+            result = await client.call_tool("get_split_context", {})
+            data = json.loads(result.content[0].text)
+            assert data["has_changes"] is False
+            assert data["file_count"] == 0
+
+    @pytest.mark.asyncio
+    async def test_returns_per_file_metadata(self, tmp_git_repo):
+        """Multiple staged files return per-file metadata."""
+        for name in ["feat.py", "test_feat.py", "docs.md"]:
+            (tmp_git_repo / name).write_text(f"# {name}\ncontents\n")
+            subprocess.run(
+                ["git", "add", name],
+                cwd=tmp_git_repo, capture_output=True, check=True,
+            )
+        async with create_session(
+            devnarrate_mcp,
+            list_roots_callback=_roots_callback(str(tmp_git_repo)),
+        ) as client:
+            result = await client.call_tool("get_split_context", {})
+            data = json.loads(result.content[0].text)
+            assert data["has_changes"] is True
+            assert data["file_count"] == 3
+            paths = {f["path"] for f in data["files"]}
+            assert paths == {"feat.py", "test_feat.py", "docs.md"}
+
+    @pytest.mark.asyncio
+    async def test_includes_secret_scan(self, tmp_git_repo):
+        """Secret scan runs on the full staged diff."""
+        f = tmp_git_repo / "clean.py"
+        f.write_text("x = 1\n")
+        subprocess.run(
+            ["git", "add", "clean.py"],
+            cwd=tmp_git_repo, capture_output=True, check=True,
+        )
+        async with create_session(
+            devnarrate_mcp,
+            list_roots_callback=_roots_callback(str(tmp_git_repo)),
+        ) as client:
+            result = await client.call_tool("get_split_context", {})
+            data = json.loads(result.content[0].text)
+            assert "secret_scan" in data
+            assert data["secret_scan"]["status"] == "clean"
+
+    @pytest.mark.asyncio
+    async def test_includes_commit_format_guide(self, tmp_git_repo):
+        """Response includes the commit format guide."""
+        f = tmp_git_repo / "guide.py"
+        f.write_text("pass\n")
+        subprocess.run(
+            ["git", "add", "guide.py"],
+            cwd=tmp_git_repo, capture_output=True, check=True,
+        )
+        async with create_session(
+            devnarrate_mcp,
+            list_roots_callback=_roots_callback(str(tmp_git_repo)),
+        ) as client:
+            result = await client.call_tool("get_split_context", {})
+            data = json.loads(result.content[0].text)
+            assert "commit_format_guide" in data
+            assert "split_instructions" in data
+
+    @pytest.mark.asyncio
+    async def test_diff_contains_all_files(self, tmp_git_repo):
+        """The diff field contains content from all staged files."""
+        (tmp_git_repo / "alpha.py").write_text("alpha = 1\n")
+        (tmp_git_repo / "beta.py").write_text("beta = 2\n")
+        subprocess.run(
+            ["git", "add", "alpha.py", "beta.py"],
+            cwd=tmp_git_repo, capture_output=True, check=True,
+        )
+        async with create_session(
+            devnarrate_mcp,
+            list_roots_callback=_roots_callback(str(tmp_git_repo)),
+        ) as client:
+            result = await client.call_tool("get_split_context", {})
+            data = json.loads(result.content[0].text)
+            assert "alpha" in data["diff"]
+            assert "beta" in data["diff"]
+
+    @pytest.mark.asyncio
+    async def test_file_metadata_has_line_counts(self, tmp_git_repo):
+        """Per-file metadata includes lines_added and lines_removed."""
+        f = tmp_git_repo / "counted.py"
+        f.write_text("line1\nline2\nline3\n")
+        subprocess.run(
+            ["git", "add", "counted.py"],
+            cwd=tmp_git_repo, capture_output=True, check=True,
+        )
+        async with create_session(
+            devnarrate_mcp,
+            list_roots_callback=_roots_callback(str(tmp_git_repo)),
+        ) as client:
+            result = await client.call_tool("get_split_context", {})
+            data = json.loads(result.content[0].text)
+            file_info = data["files"][0]
+            assert "lines_added" in file_info
+            assert "lines_removed" in file_info
+            assert file_info["lines_added"] >= 3
+
+
+# ──────────────────────────────────
+# Tests for execute_split_commit
+# ──────────────────────────────────
+
+
+class TestExecuteSplitCommit:
+    """Integration tests for the execute_split_commit MCP tool."""
+
+    @pytest.mark.asyncio
+    async def test_rejects_without_approval(self, tmp_git_repo):
+        """execute_split_commit rejects when user_approved=False."""
+        async with create_session(
+            devnarrate_mcp,
+            list_roots_callback=_roots_callback(str(tmp_git_repo)),
+        ) as client:
+            result = await client.call_tool(
+                "execute_split_commit",
+                {"files": ["a.py"], "message": "test", "user_approved": False},
+            )
+            data = json.loads(result.content[0].text)
+            assert data["success"] is False
+            assert "user_approved" in data["error"]
+
+    @pytest.mark.asyncio
+    async def test_rejects_empty_files(self, tmp_git_repo):
+        """execute_split_commit rejects when files list is empty."""
+        async with create_session(
+            devnarrate_mcp,
+            list_roots_callback=_roots_callback(str(tmp_git_repo)),
+        ) as client:
+            result = await client.call_tool(
+                "execute_split_commit",
+                {"files": [], "message": "test", "user_approved": True},
+            )
+            data = json.loads(result.content[0].text)
+            assert data["success"] is False
+
+    @pytest.mark.asyncio
+    async def test_rejects_unstaged_files(self, tmp_git_repo):
+        """execute_split_commit rejects files that aren't staged."""
+        (tmp_git_repo / "staged.py").write_text("staged\n")
+        subprocess.run(
+            ["git", "add", "staged.py"],
+            cwd=tmp_git_repo, capture_output=True, check=True,
+        )
+        async with create_session(
+            devnarrate_mcp,
+            list_roots_callback=_roots_callback(str(tmp_git_repo)),
+        ) as client:
+            result = await client.call_tool(
+                "execute_split_commit",
+                {
+                    "files": ["nonexistent.py"],
+                    "message": "test",
+                    "user_approved": True,
+                },
+            )
+            data = json.loads(result.content[0].text)
+            assert data["success"] is False
+            assert "not staged" in data["error"]
+
+    @pytest.mark.asyncio
+    async def test_commits_subset_of_staged_files(self, tmp_git_repo):
+        """Commits only the specified files, leaving others unstaged."""
+        (tmp_git_repo / "feat.py").write_text("def feat(): pass\n")
+        (tmp_git_repo / "docs.md").write_text("# Docs\n")
+        (tmp_git_repo / "test.py").write_text("def test(): pass\n")
+        subprocess.run(
+            ["git", "add", "feat.py", "docs.md", "test.py"],
+            cwd=tmp_git_repo, capture_output=True, check=True,
+        )
+        async with create_session(
+            devnarrate_mcp,
+            list_roots_callback=_roots_callback(str(tmp_git_repo)),
+        ) as client:
+            result = await client.call_tool(
+                "execute_split_commit",
+                {
+                    "files": ["feat.py", "test.py"],
+                    "message": "feat: add feature with tests",
+                    "user_approved": True,
+                },
+            )
+            data = json.loads(result.content[0].text)
+            assert data["success"] is True
+            assert "commit_hash" in data
+            assert set(data["committed_files"]) == {"feat.py", "test.py"}
+
+        # Verify: docs.md should NOT be staged anymore (unstaged)
+        log = subprocess.run(
+            ["git", "log", "--oneline", "-1"],
+            cwd=tmp_git_repo, capture_output=True, text=True, check=True,
+        )
+        assert "add feature with tests" in log.stdout
+
+    @pytest.mark.asyncio
+    async def test_sequential_split_commits(self, tmp_git_repo):
+        """Two sequential split commits each create a separate commit."""
+        (tmp_git_repo / "a.py").write_text("a = 1\n")
+        (tmp_git_repo / "b.py").write_text("b = 2\n")
+        subprocess.run(
+            ["git", "add", "a.py", "b.py"],
+            cwd=tmp_git_repo, capture_output=True, check=True,
+        )
+        async with create_session(
+            devnarrate_mcp,
+            list_roots_callback=_roots_callback(str(tmp_git_repo)),
+        ) as client:
+            # First split commit
+            result1 = await client.call_tool(
+                "execute_split_commit",
+                {
+                    "files": ["a.py"],
+                    "message": "feat: add a",
+                    "user_approved": True,
+                },
+            )
+            data1 = json.loads(result1.content[0].text)
+            assert data1["success"] is True
+
+            # Re-stage b.py (it was unstaged) and do second commit
+            subprocess.run(
+                ["git", "add", "b.py"],
+                cwd=tmp_git_repo, capture_output=True, check=True,
+            )
+            result2 = await client.call_tool(
+                "execute_split_commit",
+                {
+                    "files": ["b.py"],
+                    "message": "feat: add b",
+                    "user_approved": True,
+                },
+            )
+            data2 = json.loads(result2.content[0].text)
+            assert data2["success"] is True
+
+        # Verify both commits exist
+        log = subprocess.run(
+            ["git", "log", "--oneline", "-3"],
+            cwd=tmp_git_repo, capture_output=True, text=True, check=True,
+        )
+        assert "add a" in log.stdout
+        assert "add b" in log.stdout

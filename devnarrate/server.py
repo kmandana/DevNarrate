@@ -4,6 +4,7 @@ DevNarrate MCP Server
 
 An MCP server that helps developers with:
 - Writing commit messages
+- Splitting staged changes into logical commits
 - Generating PR descriptions
 - Posting CI/CD results to Slack
 - Sharing development updates to Slack
@@ -497,6 +498,262 @@ async def review_changes(
 
     except Exception as e:
         return json.dumps({'error': str(e)})
+
+
+@mcp.tool()
+async def get_split_context(
+    cursor: Optional[str] = None,
+    max_diff_tokens: int = 20000,
+    repo_path: Optional[str] = None
+) -> str:
+    """REQUIRED FIRST STEP: Analyze staged changes at per-file granularity for splitting into logical commits.
+
+    WHEN TO CALL: When the user has staged many changes and wants to split them
+    into multiple smaller, logical commits instead of one big commit.
+
+    This tool returns per-file diffs so you can suggest groupings. Each file's
+    diff is separate, making it easy to see what belongs together.
+
+    IMPORTANT: This tool ONLY works with STAGED changes. The user must stage
+    their changes first (git add).
+
+    CRITICAL: If there are fewer than 2 staged files, splitting is not useful.
+    Tell the user: "Only N file(s) staged — nothing to split. Use get_commit_context
+    for a single commit instead."
+
+    HOW TO PRESENT THE RESPONSE — follow these steps:
+
+    1. REVIEW the per-file diffs to understand what each file does.
+
+    2. SUGGEST GROUPS: Organize files into logical commit groups based on:
+       - Related functionality (e.g., feature code + its tests)
+       - Type of change (e.g., refactoring vs new feature vs docs)
+       - Directory structure (e.g., frontend vs backend)
+       - Dependencies (files that must be committed together to avoid breakage)
+       Present each group with:
+       - A suggested conventional commit message
+       - The list of files in the group
+       - A brief rationale for the grouping
+
+    3. ASK FOR APPROVAL: Show the split plan and ask:
+       "Should I commit these N groups in this order? You can adjust the
+       grouping or messages before I proceed."
+
+    4. EXECUTE: After approval, call execute_split_commit for each group
+       in order. Wait for each to succeed before proceeding to the next.
+
+    Args:
+        cursor: Pagination cursor for large diffs (optional)
+        max_diff_tokens: Maximum tokens per response (default: 20000)
+        repo_path: Path to git repository (optional, defaults to MCP roots)
+
+    Returns:
+        JSON string with:
+        - has_changes: boolean
+        - file_count: number of staged files
+        - files: list of per-file diffs with path, status, lines_added, lines_removed, diff
+        - secret_scan: results of secret detection on the full staged diff
+        - commit_format_guide: formatting rules for commit messages
+    """
+    try:
+        if repo_path is None:
+            context = mcp.get_context()
+            roots_result = await context.session.list_roots()
+            if roots_result.roots:
+                repo_path = roots_result.roots[0].uri.path
+            else:
+                return json.dumps({'error': 'No repository path provided and no roots available'})
+
+        cfg = config_module.load_config(repo_path)
+        commit_cfg = cfg["commit"]
+        secrets_cfg = cfg["secrets"]
+
+        # Get per-file diffs for all staged files
+        per_file = git_operations.get_per_file_diffs(repo_path)
+
+        has_changes = len(per_file) > 0
+
+        # Scan the full staged diff for secrets (only on first page)
+        if has_changes and cursor is None and secrets_cfg.get("enabled", True):
+            full_diff = git_operations.get_diff(repo_path)
+            secret_scan = secret_scanner.scan_diff(
+                full_diff,
+                max_findings=secrets_cfg.get("max_findings"),
+                custom_patterns=secrets_cfg.get("custom_patterns"),
+            )
+        else:
+            reason = 'No changes to scan.'
+            if has_changes and cursor is not None:
+                reason = 'Secret scan performed on first page only.'
+            elif has_changes and not secrets_cfg.get("enabled", True):
+                reason = 'Secret scanning disabled in .devnarrate/config.toml.'
+            secret_scan = {
+                'status': 'clean',
+                'findings': [],
+                'total_findings': 0,
+                'message': reason,
+            }
+
+        # Paginate per-file diffs: concatenate all file diffs and paginate
+        # But also provide structured per-file metadata
+        all_diffs = '\n'.join(f['diff'] for f in per_file if f['diff'])
+        paginated = git_operations.paginate_diff(all_diffs, cursor, max_diff_tokens)
+
+        # Build file metadata (without the full diff text to save tokens)
+        file_metadata = []
+        for f in per_file:
+            file_metadata.append({
+                'path': f['path'],
+                'status': f['status'],
+                'lines_added': f['lines_added'],
+                'lines_removed': f['lines_removed'],
+            })
+
+        result = {
+            'repository': repo_path,
+            'has_changes': has_changes,
+            'file_count': len(per_file),
+            'files': file_metadata,
+            'secret_scan': secret_scan,
+            'diff': paginated['diff_chunk'],
+            'next_cursor': paginated['next_cursor'],
+            'pagination_info': paginated['chunk_info'],
+            'commit_format_guide': {
+                'subject_line': f'Max {commit_cfg["max_subject_length"]} characters',
+                'body_line_length': f'Max {commit_cfg["max_body_line_length"]} characters per line',
+                'format': 'type(scope): description\\n\\nBody paragraphs...\\n\\nFooter',
+                'types': commit_cfg["types"],
+                'require_scope': commit_cfg.get("require_scope", False),
+                'important': 'DO NOT include AI signatures, attribution, or "Generated with" footers in the commit message'
+            },
+            'split_instructions': {
+                'workflow': [
+                    '1. Review per-file diffs to understand each change',
+                    '2. Group files by logical purpose (feature, fix, docs, etc.)',
+                    '3. Present the split plan with commit messages to the user',
+                    '4. After approval, call execute_split_commit for each group in order',
+                ],
+                'grouping_hints': [
+                    'Keep related code and its tests together',
+                    'Separate refactoring from feature changes',
+                    'Documentation changes can be their own commit',
+                    'Config/dependency changes can be their own commit',
+                    'Files that must work together should be in the same commit',
+                ],
+            },
+        }
+
+        return json.dumps(result, indent=2)
+
+    except Exception as e:
+        return json.dumps({'error': str(e)})
+
+
+@mcp.tool()
+async def execute_split_commit(
+    files: list[str],
+    message: str,
+    user_approved: bool,
+    repo_path: Optional[str] = None
+) -> str:
+    """Execute one commit in a split-commit workflow, committing only the specified files.
+
+    CRITICAL WORKFLOW — YOU MUST FOLLOW THESE STEPS:
+    1. Call get_split_context first to analyze all staged changes
+    2. Present the full split plan (all groups with messages) to the user
+    3. Get user approval for the ENTIRE plan before executing ANY commits
+    4. Call this tool once per group, IN ORDER, with user_approved=True
+    5. Wait for each call to succeed before proceeding to the next group
+
+    This tool:
+    - Unstages ALL currently staged files
+    - Stages ONLY the files listed in the 'files' parameter
+    - Commits with the given message
+    - After the commit, the remaining files are left unstaged
+
+    NOTE: This operates at file granularity. If you need hunk-level splitting
+    (different parts of the same file in different commits), the user should
+    use interactive staging (git add -p) manually.
+
+    Args:
+        files: List of file paths to include in this commit
+        message: Commit message (should follow conventional commit format)
+        user_approved: REQUIRED — Must be True. Confirms user approved the split plan.
+        repo_path: Path to git repository (optional, defaults to MCP roots)
+
+    Returns:
+        JSON string with:
+        - success: boolean
+        - commit_hash: short hash of the new commit
+        - committed_files: list of files included
+        - remaining_staged: number of files still staged (0 after split commit)
+        - message: status message
+    """
+    if not user_approved:
+        return json.dumps({
+            'success': False,
+            'error': 'user_approved must be True. Show the split plan to the user and get their approval first.',
+        })
+
+    if not files:
+        return json.dumps({
+            'success': False,
+            'error': 'files list must not be empty. Specify which files to include in this commit.',
+        })
+
+    try:
+        if repo_path is None:
+            context = mcp.get_context()
+            roots_result = await context.session.list_roots()
+            if roots_result.roots:
+                repo_path = roots_result.roots[0].uri.path
+            else:
+                return json.dumps({'error': 'No repository path provided and no roots available'})
+
+        # Get current staged files to know what to restore after
+        current_staged = git_operations.get_file_stats(repo_path)
+        staged_paths = [f['path'] for f in current_staged['files']]
+
+        # Validate that requested files are actually staged
+        missing = [f for f in files if f not in staged_paths]
+        if missing:
+            return json.dumps({
+                'success': False,
+                'error': f'These files are not staged: {missing}. Stage them first or check the file paths.',
+            })
+
+        # Files to unstage = all staged files NOT in this commit
+        files_to_unstage = [f for f in staged_paths if f not in files]
+
+        # Unstage everything except our target files
+        if files_to_unstage:
+            git_operations.unstage_files(repo_path, files_to_unstage)
+
+        # Commit the remaining staged files (our target files)
+        try:
+            commit_result = git_operations.execute_commit(repo_path, message)
+        except Exception as commit_err:
+            # Re-stage the files we unstaged to restore original state
+            if files_to_unstage:
+                git_operations.stage_files(repo_path, files_to_unstage)
+            return json.dumps({
+                'success': False,
+                'error': f'Commit failed: {commit_err}. Original staging restored.',
+            })
+
+        # Extract commit hash from result
+        commit_hash = commit_result.split()[3] if 'Successfully' in commit_result else 'unknown'
+
+        return json.dumps({
+            'success': True,
+            'commit_hash': commit_hash,
+            'committed_files': files,
+            'remaining_unstaged': len(files_to_unstage),
+            'message': commit_result,
+        }, indent=2)
+
+    except Exception as e:
+        return json.dumps({'success': False, 'error': str(e)})
 
 
 if __name__ == "__main__":

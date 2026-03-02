@@ -6,6 +6,8 @@ These tests verify that the git operations correctly:
 - Execute commits and report the hash
 - Work with branches (current branch, branch diff, branch commits)
 - Detect git platform from remote URLs
+- Get per-file diffs for split-commit workflows
+- Stage and unstage specific files
 - Handle edge cases (empty repos, no staged changes, etc.)
 """
 
@@ -23,7 +25,10 @@ from devnarrate.git_operations import (
     get_current_branch,
     get_diff,
     get_file_stats,
+    get_per_file_diffs,
     paginate_diff,
+    stage_files,
+    unstage_files,
 )
 
 
@@ -391,3 +396,143 @@ class TestDetectGitPlatform:
             cwd=tmp_git_repo, capture_output=True, check=True,
         )
         assert detect_git_platform(str(tmp_git_repo)) == "unknown"
+
+
+# ──────────────────────────────────
+# Tests for get_per_file_diffs()
+# ──────────────────────────────────
+
+
+class TestGetPerFileDiffs:
+    """Tests for per-file diff extraction."""
+
+    def test_no_staged_files(self, tmp_git_repo):
+        result = get_per_file_diffs(str(tmp_git_repo))
+        assert result == []
+
+    def test_single_staged_file(self, tmp_git_repo):
+        f = tmp_git_repo / "single.py"
+        f.write_text("x = 1\n")
+        subprocess.run(
+            ["git", "add", "single.py"],
+            cwd=tmp_git_repo, capture_output=True, check=True,
+        )
+        result = get_per_file_diffs(str(tmp_git_repo))
+        assert len(result) == 1
+        assert result[0]["path"] == "single.py"
+        assert result[0]["status"] == "added"
+        assert result[0]["lines_added"] >= 1
+        assert "x = 1" in result[0]["diff"]
+
+    def test_multiple_staged_files(self, tmp_git_repo):
+        for name in ["a.py", "b.py", "c.py"]:
+            (tmp_git_repo / name).write_text(f"# {name}\n")
+            subprocess.run(
+                ["git", "add", name],
+                cwd=tmp_git_repo, capture_output=True, check=True,
+            )
+        result = get_per_file_diffs(str(tmp_git_repo))
+        assert len(result) == 3
+        paths = {f["path"] for f in result}
+        assert paths == {"a.py", "b.py", "c.py"}
+
+    def test_modified_file_diff(self, tmp_git_repo):
+        readme = tmp_git_repo / "README.md"
+        readme.write_text("# Updated\nNew line\n")
+        subprocess.run(
+            ["git", "add", "README.md"],
+            cwd=tmp_git_repo, capture_output=True, check=True,
+        )
+        result = get_per_file_diffs(str(tmp_git_repo))
+        assert len(result) == 1
+        assert result[0]["status"] == "modified"
+        assert result[0]["lines_added"] >= 1
+        assert result[0]["lines_removed"] >= 1
+
+    def test_each_file_has_separate_diff(self, tmp_git_repo):
+        (tmp_git_repo / "first.py").write_text("alpha = 1\n")
+        (tmp_git_repo / "second.py").write_text("beta = 2\n")
+        subprocess.run(
+            ["git", "add", "first.py", "second.py"],
+            cwd=tmp_git_repo, capture_output=True, check=True,
+        )
+        result = get_per_file_diffs(str(tmp_git_repo))
+        diffs_by_path = {f["path"]: f["diff"] for f in result}
+        assert "alpha" in diffs_by_path["first.py"]
+        assert "beta" in diffs_by_path["second.py"]
+        # Each file diff should NOT contain the other file's content
+        assert "beta" not in diffs_by_path["first.py"]
+        assert "alpha" not in diffs_by_path["second.py"]
+
+
+# ──────────────────────────────────
+# Tests for unstage_files()
+# ──────────────────────────────────
+
+
+class TestUnstageFiles:
+    """Tests for unstaging specific files."""
+
+    def test_unstage_one_file(self, tmp_git_repo):
+        (tmp_git_repo / "keep.py").write_text("keep\n")
+        (tmp_git_repo / "remove.py").write_text("remove\n")
+        subprocess.run(
+            ["git", "add", "keep.py", "remove.py"],
+            cwd=tmp_git_repo, capture_output=True, check=True,
+        )
+        unstage_files(str(tmp_git_repo), ["remove.py"])
+        stats = get_file_stats(str(tmp_git_repo))
+        paths = {f["path"] for f in stats["files"]}
+        assert "keep.py" in paths
+        assert "remove.py" not in paths
+
+    def test_unstage_multiple_files(self, tmp_git_repo):
+        for name in ["a.py", "b.py", "c.py"]:
+            (tmp_git_repo / name).write_text(f"# {name}\n")
+        subprocess.run(
+            ["git", "add", "a.py", "b.py", "c.py"],
+            cwd=tmp_git_repo, capture_output=True, check=True,
+        )
+        unstage_files(str(tmp_git_repo), ["a.py", "c.py"])
+        stats = get_file_stats(str(tmp_git_repo))
+        paths = {f["path"] for f in stats["files"]}
+        assert paths == {"b.py"}
+
+    def test_unstage_empty_list_raises(self, tmp_git_repo):
+        with pytest.raises(ValueError, match="must not be empty"):
+            unstage_files(str(tmp_git_repo), [])
+
+
+# ──────────────────────────────────
+# Tests for stage_files()
+# ──────────────────────────────────
+
+
+class TestStageFiles:
+    """Tests for staging specific files."""
+
+    def test_stage_specific_files(self, tmp_git_repo):
+        (tmp_git_repo / "stage_me.py").write_text("staged\n")
+        (tmp_git_repo / "leave_me.py").write_text("unstaged\n")
+        stage_files(str(tmp_git_repo), ["stage_me.py"])
+        stats = get_file_stats(str(tmp_git_repo))
+        paths = {f["path"] for f in stats["files"]}
+        assert "stage_me.py" in paths
+        assert "leave_me.py" not in paths
+
+    def test_stage_empty_list_raises(self, tmp_git_repo):
+        with pytest.raises(ValueError, match="must not be empty"):
+            stage_files(str(tmp_git_repo), [])
+
+    def test_restage_after_unstage(self, tmp_git_repo):
+        (tmp_git_repo / "toggle.py").write_text("toggle\n")
+        subprocess.run(
+            ["git", "add", "toggle.py"],
+            cwd=tmp_git_repo, capture_output=True, check=True,
+        )
+        unstage_files(str(tmp_git_repo), ["toggle.py"])
+        stats = get_file_stats(str(tmp_git_repo))
+        assert not any(f["path"] == "toggle.py" for f in stats["files"])
+        stage_files(str(tmp_git_repo), ["toggle.py"])
+        stats = get_file_stats(str(tmp_git_repo))
+        assert any(f["path"] == "toggle.py" for f in stats["files"])
