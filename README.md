@@ -72,13 +72,13 @@ git add <file1> <file2>
 git add -u
 ```
 
-Then ask Claude:
+Then ask your AI assistant:
 
 ```
 Generate a commit message for my changes
 ```
 
-Claude inspects the staged diff, proposes a conventional commit message, and asks for approval before running `git commit`.
+DevNarrate inspects the staged diff, proposes a conventional commit message, and asks for approval before running `git commit`.
 
 ### Change Review
 
@@ -104,7 +104,7 @@ Secret scanning runs automatically as part of `get_commit_context`. When you sta
 - **Private keys** (RSA, SSH, PGP)
 - **High-entropy strings** that look like secrets
 
-If secrets are found, Claude warns you before committing. To suppress false positives, add an inline comment:
+If secrets are found, you're warned before committing. To suppress false positives, add an inline comment:
 
 ```python
 SAFE_VALUE = "not-a-real-secret"  # pragma: allowlist secret
@@ -112,9 +112,9 @@ SAFE_VALUE = "not-a-real-secret"  # pragma: allowlist secret
 
 ### PR Descriptions
 
-1. Ask Claude: "Create a PR to main from my current branch"
-2. Claude analyzes the diff and offers template options (custom templates live in `.devnarrate/pr-templates/`)
-3. Review the generated description and approve to let Claude create the PR via `gh` or `glab`
+1. Ask your AI assistant: "Create a PR to main from my current branch"
+2. DevNarrate analyzes the diff and offers template options (custom templates live in `.devnarrate/pr-templates/`)
+3. Review the generated description and approve to create the PR via `gh` or `glab`
 
 ### Configuration (Optional)
 
