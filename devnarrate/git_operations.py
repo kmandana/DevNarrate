@@ -1,7 +1,10 @@
 """Git operations for DevNarrate."""
 
+import logging
 import subprocess
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 import tiktoken
 
@@ -83,6 +86,7 @@ def get_file_stats(repo_path: str) -> dict:
 
     # Parse file status
     # Format: XY filepath (X=staged, Y=unstaged, space=no change)
+    # Renames/copies show as: XY old_path -> new_path
     files = []
     for line in status_result.stdout.strip().split('\n'):
         if not line:
@@ -90,7 +94,7 @@ def get_file_stats(repo_path: str) -> dict:
 
         # First 2 chars are status codes (XY), rest is filepath
         staged_status = line[0]
-        filepath = line[2:].strip()  # Skip status codes and strip whitespace
+        filepath = line[3:]  # Skip "XY " (status codes + space)
 
         # Skip files with no staged changes (untracked or not staged)
         if staged_status in (' ', '?'):
@@ -105,11 +109,24 @@ def get_file_stats(repo_path: str) -> dict:
             file_status = 'modified'
         elif staged_status == 'R':
             file_status = 'renamed'
+        elif staged_status == 'C':
+            file_status = 'copied'
+        elif staged_status == 'T':
+            file_status = 'type-changed'
 
-        files.append({
+        # Handle renames/copies: "old_path -> new_path"
+        old_path = None
+        if ' -> ' in filepath:
+            old_path, filepath = filepath.rsplit(' -> ', 1)
+
+        entry = {
             'path': filepath,
-            'status': file_status
-        })
+            'status': file_status,
+        }
+        if old_path is not None:
+            entry['old_path'] = old_path
+
+        files.append(entry)
 
     return {'files': files}
 
@@ -451,6 +468,132 @@ def get_working_file_stats(repo_path: str) -> dict:
             files.append({'path': filepath, 'status': 'added'})
 
     return {'files': files}
+
+
+def get_per_file_diffs(repo_path: str) -> list[dict]:
+    """Get staged diff for each file separately.
+
+    Returns a list of per-file diffs so the caller can present
+    file-level groupings for split-commit workflows.
+
+    Args:
+        repo_path: Path to the git repository
+
+    Returns:
+        List of dicts, each with:
+        - path: file path
+        - status: added/modified/deleted/renamed
+        - diff: the diff text for this file only
+        - lines_added: number of added lines
+        - lines_removed: number of removed lines
+    """
+    stats = get_file_stats(repo_path)
+    results = []
+
+    for file_info in stats['files']:
+        filepath = file_info['path']
+        # For renames/copies, pass both old and new paths so git can find the diff
+        diff_paths = [filepath]
+        if 'old_path' in file_info:
+            diff_paths = [file_info['old_path'], filepath]
+
+        # Get diff for this specific file
+        try:
+            diff_result = subprocess.run(
+                ['git', 'diff', '--staged', '--'] + diff_paths,
+                cwd=repo_path,
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            file_diff = diff_result.stdout
+
+            # Count added/removed lines from diff
+            lines_added = 0
+            lines_removed = 0
+            for line in file_diff.split('\n'):
+                if line.startswith('+') and not line.startswith('+++'):
+                    lines_added += 1
+                elif line.startswith('-') and not line.startswith('---'):
+                    lines_removed += 1
+
+        except subprocess.CalledProcessError as e:
+            logger.warning(
+                "Failed to get diff for %s: %s", filepath, e.stderr or e
+            )
+            file_diff = ''
+            lines_added = 0
+            lines_removed = 0
+
+        results.append({
+            'path': filepath,
+            'status': file_info['status'],
+            'diff': file_diff,
+            'lines_added': lines_added,
+            'lines_removed': lines_removed,
+        })
+
+    return results
+
+
+def unstage_files(repo_path: str, files: list[str]) -> None:
+    """Unstage specific files from the staging area.
+
+    Uses 'git reset HEAD -- <files>' to move files from staged back
+    to the working tree without discarding changes. Falls back to
+    'git rm --cached' for repos with no HEAD (initial commit).
+
+    Args:
+        repo_path: Path to the git repository
+        files: List of file paths to unstage
+
+    Raises:
+        subprocess.CalledProcessError: If git command fails
+        ValueError: If files list is empty
+    """
+    if not files:
+        raise ValueError("files list must not be empty")
+
+    try:
+        subprocess.run(
+            ['git', 'reset', 'HEAD', '--'] + files,
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+            check=True
+        )
+    except subprocess.CalledProcessError:
+        # Fallback for repos with no commits yet (no HEAD to reset to)
+        subprocess.run(
+            ['git', 'rm', '--cached', '--'] + files,
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+            check=True
+        )
+
+
+def stage_files(repo_path: str, files: list[str]) -> None:
+    """Stage specific files.
+
+    Args:
+        repo_path: Path to the git repository
+        files: List of file paths to stage
+
+    Raises:
+        subprocess.CalledProcessError: If git command fails
+        ValueError: If files list is empty
+    """
+    if not files:
+        raise ValueError("files list must not be empty")
+
+    subprocess.run(
+        ['git', 'add', '--'] + files,
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+        check=True
+    )
 
 
 def detect_git_platform(repo_path: str) -> str:
