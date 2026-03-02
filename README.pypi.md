@@ -88,32 +88,7 @@ Secret scanning runs automatically when you ask for a commit message. DevNarrate
 
 ### Configuration
 
-Drop a `.devnarrate/config.toml` in your repo root to customize behavior:
-
-```toml
-[commit]
-types = ["feat", "fix", "hotfix"]  # allowed commit type prefixes
-max_subject_length = 60            # subject line character limit
-require_scope = true               # enforce type(scope): format
-
-[secrets]
-enabled = true                     # master switch for secret scanning
-max_findings = 10                  # cap findings per scan
-
-[[secrets.custom_patterns]]        # add your own regex detectors
-name = "Internal API Key"
-pattern = "MYCO-[A-Za-z0-9]{32}"
-
-[pr]
-default_base_branch = "develop"    # base branch for PR diffs
-draft_by_default = true            # always open draft PRs
-template = "feature.md"            # preferred template in .devnarrate/pr-templates/
-
-[review]
-large_change_threshold = 25        # lines added to flag as "large change"
-```
-
-All settings are optional — omit any key to use the defaults. See the [full reference](https://github.com/kmandana/DevNarrate#configuration-optional) in the GitHub README.
+DevNarrate ships a fully commented [`.devnarrate/config.toml`](https://github.com/kmandana/DevNarrate/blob/main/.devnarrate/config.toml) with all available settings and their defaults. Copy it into your repo and edit the values you care about — every option is documented inline.
 
 ### Platform Requirements
 

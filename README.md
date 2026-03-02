@@ -118,59 +118,9 @@ SAFE_VALUE = "not-a-real-secret"  # pragma: allowlist secret
 
 ### Configuration (Optional)
 
-Create `.devnarrate/config.toml` in your repo root to customize DevNarrate's behavior:
+DevNarrate ships a fully commented config file at [`.devnarrate/config.toml`](.devnarrate/config.toml). Copy it into your repo root and edit the values you care about — every setting documents its purpose and default inline.
 
-```toml
-# ── Commit message settings ─────────────────────────────────────
-[commit]
-# Allowed conventional-commit type prefixes.
-# Default: ["feat", "fix", "docs", "style", "refactor", "test", "chore"]
-types = ["feat", "fix", "docs", "style", "refactor", "test", "chore"]
-
-# Max character length for the subject line (first line). Default: 50
-max_subject_length = 50
-
-# Max character length per line in the commit body. Default: 72
-max_body_line_length = 72
-
-# Require a scope in commit messages — e.g. feat(auth): instead of feat:
-# Default: false
-require_scope = false
-
-# ── Secret scanning settings ────────────────────────────────────
-[secrets]
-# Master switch — set to false to disable scanning entirely. Default: true
-enabled = true
-
-# Max findings returned per scan (extras are still counted). Default: 20
-max_findings = 20
-
-# Add your own regex patterns on top of the 25+ built-in detectors.
-# Custom matches take priority over built-in detector names.
-# [[secrets.custom_patterns]]
-# name = "Internal API Key"
-# pattern = "MYCO-[A-Za-z0-9]{32}"
-
-# ── PR settings ─────────────────────────────────────────────────
-[pr]
-# Default base branch for PR comparisons. Default: "main"
-default_base_branch = "main"
-
-# Always open PRs as drafts. Default: false
-draft_by_default = false
-
-# Preferred template file in .devnarrate/pr-templates/.
-# Leave empty to be prompted each time. Default: ""
-template = ""
-
-# ── Change review settings ──────────────────────────────────────
-[review]
-# Files with more added lines than this are flagged as "large changes"
-# in the review summary. Default: 50
-large_change_threshold = 50
-```
-
-All settings are optional — omit any section or key to use the defaults.
+All settings are optional — delete or comment out any line to use the default.
 
 ### PR Templates (Optional)
 
