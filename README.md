@@ -13,6 +13,7 @@ MCP server for developer workflow automation — smart commits, secret scanning,
 - **Multi-Platform**: Supports GitHub and GitLab
 - **Token-Aware**: Handles large diffs with automatic pagination
 - **Template System**: Use custom PR templates or built-in defaults
+- **Split Commits**: Automatically suggests breaking large staged changes into focused, logical commits
 - **Safety First**: Only works with staged changes to prevent accidental commits
 
 ## Installation (Source / Development)
@@ -108,6 +109,21 @@ If secrets are found, you're warned before committing. To suppress false positiv
 
 ```python
 SAFE_VALUE = "not-a-real-secret"  # pragma: allowlist secret
+```
+
+### Split Commits
+
+When you stage changes touching many files (4+ by default), DevNarrate automatically suggests splitting them into focused commits. After reviewing the suggested groupings:
+
+```
+Commit my staged changes
+```
+
+DevNarrate analyzes per-file diffs, groups related files, and proposes logical commit boundaries. You approve each group before it's committed. Configure the threshold in `.devnarrate/config.toml`:
+
+```toml
+[commit]
+split_threshold = 4   # set to 0 to disable
 ```
 
 ### PR Descriptions

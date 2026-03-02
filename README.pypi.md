@@ -12,6 +12,7 @@ MCP server for developer workflow automation — smart commits, secret scanning,
 - **PR Descriptions** driven by customizable templates
 - **GitHub & GitLab** support for PR flows
 - **Token-aware diff handling** with automatic pagination
+- **Split Commits** — automatically suggests breaking large staged changes into focused, logical commits
 - **Safety-first workflow** by requiring staged changes
 
 ## Installation (PyPI)
@@ -79,6 +80,14 @@ After an AI assistant makes changes, ask it to review them before committing. De
 ### Secret Scanning
 
 Secret scanning runs automatically when you ask for a commit message. DevNarrate scans staged diffs for API keys, tokens, passwords, and private keys. If secrets are found, you're warned before committing. Suppress false positives with an inline `# pragma: allowlist secret` comment.
+
+### Split Commits
+
+When you stage changes touching many files (4+ by default), DevNarrate suggests splitting them into focused commits grouped by logical concern. You approve each group before it's committed. Adjust the threshold via `split_threshold` in `.devnarrate/config.toml` (set to 0 to disable).
+
+### Split Commits
+
+When you stage changes touching many files (4+ by default), DevNarrate automatically suggests splitting them into focused commits. It analyzes per-file diffs, groups related files, and proposes logical commit boundaries — you approve each group before it's committed. Configure the threshold via `split_threshold` in `.devnarrate/config.toml` (set to 0 to disable).
 
 ### PR Descriptions
 
