@@ -23,6 +23,11 @@ def tmp_git_repo(tmp_path: Path) -> Path:
         ["git", "config", "user.name", "Test User"],
         cwd=tmp_path, capture_output=True, check=True,
     )
+    # Disable commit signing so tests work in environments with global gpg config
+    subprocess.run(
+        ["git", "config", "commit.gpgsign", "false"],
+        cwd=tmp_path, capture_output=True, check=True,
+    )
     # Create an initial commit so we have a valid HEAD
     initial_file = tmp_path / "README.md"
     initial_file.write_text("# Test Repo\n")

@@ -85,10 +85,6 @@ Secret scanning runs automatically when you ask for a commit message. DevNarrate
 
 When you stage changes touching many files (4+ by default), DevNarrate suggests splitting them into focused commits grouped by logical concern. You approve each group before it's committed. Adjust the threshold via `split_threshold` in `.devnarrate/config.toml` (set to 0 to disable).
 
-### Split Commits
-
-When you stage changes touching many files (4+ by default), DevNarrate automatically suggests splitting them into focused commits. It analyzes per-file diffs, groups related files, and proposes logical commit boundaries — you approve each group before it's committed. Configure the threshold via `split_threshold` in `.devnarrate/config.toml` (set to 0 to disable).
-
 ### PR Descriptions
 
 1. Ask your AI assistant: "Create a PR to main from my current branch"
