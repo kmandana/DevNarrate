@@ -596,6 +596,170 @@ def stage_files(repo_path: str, files: list[str]) -> None:
     )
 
 
+def get_activity_summary(
+    repo_path: str,
+    since: str = "yesterday",
+    author: Optional[str] = None,
+) -> dict:
+    """Collect developer activity: commits, branches, files changed, and PR-like info.
+
+    Args:
+        repo_path: Path to the git repository
+        since: Time range for the summary (e.g., "yesterday", "1 week ago", "2025-01-01")
+        author: Git author filter. "me" (or None) resolves to the configured user.
+                Pass an explicit name/email to filter by someone else.
+
+    Returns:
+        Dict with:
+        - author: resolved author identity
+        - since: the time range used
+        - commits: list of commit dicts (hash, message, date, branch)
+        - branches_touched: unique branches that had commits
+        - files_changed: aggregated file change stats
+        - total_commits: count
+        - total_files_changed: count
+        - total_lines_added: sum
+        - total_lines_removed: sum
+    """
+    # Resolve author identity
+    if author is None or author.lower() == "me":
+        try:
+            result = subprocess.run(
+                ["git", "config", "user.name"],
+                cwd=repo_path, capture_output=True, text=True, check=True,
+            )
+            resolved_author = result.stdout.strip()
+        except subprocess.CalledProcessError:
+            resolved_author = ""
+    else:
+        resolved_author = author
+
+    # Build git log command
+    log_cmd = [
+        "git", "log",
+        f"--since={since}",
+        "--all",
+        "--format=%H%x00%h%x00%s%x00%ai%x00%D",
+    ]
+    if resolved_author:
+        log_cmd.append(f"--author={resolved_author}")
+
+    result = subprocess.run(
+        log_cmd, cwd=repo_path, capture_output=True, text=True, check=True,
+    )
+
+    commits = []
+    branches_touched = set()
+    for line in result.stdout.strip().split("\n"):
+        if not line:
+            continue
+        parts = line.split("\x00")
+        if len(parts) < 5:
+            continue
+        full_hash, short_hash, subject, date, refs = parts
+
+        # Extract branch names from refs (e.g., "HEAD -> main, origin/main")
+        branch = ""
+        if refs.strip():
+            for ref in refs.split(","):
+                ref = ref.strip()
+                if ref.startswith("HEAD -> "):
+                    ref = ref[len("HEAD -> "):]
+                # Skip tags and origin refs for branch tracking
+                if "/" not in ref and ref:
+                    branches_touched.add(ref)
+                    if not branch:
+                        branch = ref
+                elif ref.startswith("origin/") and not ref.startswith("origin/HEAD"):
+                    local_name = ref[len("origin/"):]
+                    branches_touched.add(local_name)
+                    if not branch:
+                        branch = local_name
+
+        commits.append({
+            "hash": short_hash,
+            "message": subject,
+            "date": date,
+            "branch": branch,
+        })
+
+    # If no branch info from refs, try to find which branch contains each commit
+    if commits and not branches_touched:
+        try:
+            branch_result = subprocess.run(
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                cwd=repo_path, capture_output=True, text=True, check=True,
+            )
+            current_branch = branch_result.stdout.strip()
+            branches_touched.add(current_branch)
+        except subprocess.CalledProcessError:
+            pass
+
+    # Get file change stats across all those commits
+    total_lines_added = 0
+    total_lines_removed = 0
+    file_changes: dict[str, dict] = {}  # path -> {added, removed, commits}
+
+    if commits:
+        # Use numstat to get per-file line counts
+        numstat_cmd = [
+            "git", "log",
+            f"--since={since}",
+            "--all",
+            "--numstat",
+            "--format=",
+        ]
+        if resolved_author:
+            numstat_cmd.append(f"--author={resolved_author}")
+
+        numstat_result = subprocess.run(
+            numstat_cmd, cwd=repo_path, capture_output=True, text=True, check=True,
+        )
+
+        for line in numstat_result.stdout.strip().split("\n"):
+            if not line:
+                continue
+            parts = line.split("\t")
+            if len(parts) < 3:
+                continue
+            added_str, removed_str, filepath = parts[0], parts[1], parts[2]
+
+            # Binary files show "-" for line counts
+            added = int(added_str) if added_str != "-" else 0
+            removed = int(removed_str) if removed_str != "-" else 0
+
+            total_lines_added += added
+            total_lines_removed += removed
+
+            if filepath not in file_changes:
+                file_changes[filepath] = {"added": 0, "removed": 0, "commits": 0}
+            file_changes[filepath]["added"] += added
+            file_changes[filepath]["removed"] += removed
+            file_changes[filepath]["commits"] += 1
+
+    # Sort files by total churn (added + removed) descending
+    files_sorted = sorted(
+        [
+            {"path": path, **stats}
+            for path, stats in file_changes.items()
+        ],
+        key=lambda f: f["added"] + f["removed"],
+        reverse=True,
+    )
+
+    return {
+        "author": resolved_author,
+        "since": since,
+        "commits": commits,
+        "branches_touched": sorted(branches_touched),
+        "files_changed": files_sorted,
+        "total_commits": len(commits),
+        "total_files_changed": len(file_changes),
+        "total_lines_added": total_lines_added,
+        "total_lines_removed": total_lines_removed,
+    }
+
+
 def detect_git_platform(repo_path: str) -> str:
     """Detect git platform from remote URL.
 

@@ -673,5 +673,71 @@ async def execute_split_commit(
         return json.dumps({'success': False, 'error': str(e)})
 
 
+@mcp.tool()
+async def get_activity_summary(
+    since: str = "yesterday",
+    author: str = "me",
+    repo_path: Optional[str] = None
+) -> str:
+    """Get a summary of developer activity — commits, branches, files changed.
+
+    Perfect for standups, timesheets, and weekly reports. Call this tool when
+    the user wants to know "what did I do?" over a given time period.
+
+    HOW TO PRESENT THE RESPONSE:
+
+    1. HEADLINE: Start with a one-line summary, e.g.:
+       "You made 12 commits across 3 branches since yesterday, touching 8 files."
+
+    2. COMMITS BY BRANCH: Group commits by branch. For each branch, list
+       commits chronologically with hash and message. Keep it scannable.
+
+    3. FILE IMPACT: Highlight the top files by churn (lines added + removed).
+       Show "path (+added/-removed, N commits)" for the top 5-10 files.
+
+    4. STATS: End with totals — commits, files, lines added/removed.
+
+    5. If the result is empty (no commits found), tell the user and suggest
+       adjusting the time range or checking the author filter.
+
+    Args:
+        since: Time range — "yesterday", "1 week ago", "2 weeks ago",
+               "2025-01-01", "last Monday", etc. Anything `git log --since` accepts.
+               Default: "yesterday"
+        author: Git author to filter by. "me" uses the git-configured user.name.
+                Pass a name or email to see someone else's activity.
+                Default: "me"
+        repo_path: Path to git repository (optional, defaults to MCP roots).
+
+    Returns:
+        JSON string with:
+        - author: resolved author identity
+        - since: time range used
+        - commits: list of {hash, message, date, branch}
+        - branches_touched: list of branch names
+        - files_changed: list of {path, added, removed, commits} sorted by churn
+        - total_commits, total_files_changed, total_lines_added, total_lines_removed
+    """
+    try:
+        if repo_path is None:
+            context = mcp.get_context()
+            roots_result = await context.session.list_roots()
+            if roots_result.roots:
+                repo_path = roots_result.roots[0].uri.path
+            else:
+                return json.dumps({'error': 'No repository path provided and no roots available'})
+
+        summary = git_operations.get_activity_summary(
+            repo_path=repo_path,
+            since=since,
+            author=author,
+        )
+
+        return json.dumps(summary, indent=2)
+
+    except Exception as e:
+        return json.dumps({'error': str(e)})
+
+
 if __name__ == "__main__":
     mcp.run()

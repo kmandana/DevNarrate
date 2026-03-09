@@ -637,3 +637,114 @@ class TestExecuteSplitCommit:
         )
         assert "add a" in log.stdout
         assert "add b" in log.stdout
+
+
+# ──────────────────────────────────
+# Tests for get_activity_summary
+# ──────────────────────────────────
+
+
+class TestGetActivitySummary:
+    """Integration tests for the get_activity_summary MCP tool."""
+
+    @pytest.mark.asyncio
+    async def test_empty_activity(self, tmp_git_repo):
+        """No commits in far-future range → zero results."""
+        async with create_session(
+            devnarrate_mcp,
+            list_roots_callback=_roots_callback(str(tmp_git_repo)),
+        ) as client:
+            result = await client.call_tool(
+                "get_activity_summary", {"since": "2099-01-01"}
+            )
+            data = json.loads(result.content[0].text)
+            assert data["total_commits"] == 0
+            assert data["commits"] == []
+
+    @pytest.mark.asyncio
+    async def test_finds_commits(self, tmp_git_repo):
+        """Recent commits appear in the summary."""
+        f = tmp_git_repo / "tool_test.py"
+        f.write_text("x = 42\n")
+        subprocess.run(
+            ["git", "add", "tool_test.py"],
+            cwd=tmp_git_repo, capture_output=True, check=True,
+        )
+        subprocess.run(
+            ["git", "commit", "-m", "feat: tool test"],
+            cwd=tmp_git_repo, capture_output=True, check=True,
+        )
+        async with create_session(
+            devnarrate_mcp,
+            list_roots_callback=_roots_callback(str(tmp_git_repo)),
+        ) as client:
+            result = await client.call_tool(
+                "get_activity_summary", {"since": "1 hour ago"}
+            )
+            data = json.loads(result.content[0].text)
+            assert data["total_commits"] >= 1
+            messages = [c["message"] for c in data["commits"]]
+            assert "feat: tool test" in messages
+
+    @pytest.mark.asyncio
+    async def test_default_parameters(self, tmp_git_repo):
+        """Calling with no args uses defaults (since=yesterday, author=me)."""
+        async with create_session(
+            devnarrate_mcp,
+            list_roots_callback=_roots_callback(str(tmp_git_repo)),
+        ) as client:
+            result = await client.call_tool("get_activity_summary", {})
+            data = json.loads(result.content[0].text)
+            assert data["since"] == "yesterday"
+            assert data["author"] == "Test User"
+            assert "total_commits" in data
+
+    @pytest.mark.asyncio
+    async def test_response_has_file_stats(self, tmp_git_repo):
+        """Response includes file change statistics."""
+        f = tmp_git_repo / "file_stats.py"
+        f.write_text("a = 1\nb = 2\n")
+        subprocess.run(
+            ["git", "add", "file_stats.py"],
+            cwd=tmp_git_repo, capture_output=True, check=True,
+        )
+        subprocess.run(
+            ["git", "commit", "-m", "feat: file stats"],
+            cwd=tmp_git_repo, capture_output=True, check=True,
+        )
+        async with create_session(
+            devnarrate_mcp,
+            list_roots_callback=_roots_callback(str(tmp_git_repo)),
+        ) as client:
+            result = await client.call_tool(
+                "get_activity_summary", {"since": "1 hour ago"}
+            )
+            data = json.loads(result.content[0].text)
+            assert data["total_files_changed"] >= 1
+            assert data["total_lines_added"] >= 2
+            paths = [f["path"] for f in data["files_changed"]]
+            assert "file_stats.py" in paths
+
+    @pytest.mark.asyncio
+    async def test_author_filter_excludes(self, tmp_git_repo):
+        """Filtering by wrong author returns zero commits."""
+        f = tmp_git_repo / "excluded.py"
+        f.write_text("z = 0\n")
+        subprocess.run(
+            ["git", "add", "excluded.py"],
+            cwd=tmp_git_repo, capture_output=True, check=True,
+        )
+        subprocess.run(
+            ["git", "commit", "-m", "feat: excluded"],
+            cwd=tmp_git_repo, capture_output=True, check=True,
+        )
+        async with create_session(
+            devnarrate_mcp,
+            list_roots_callback=_roots_callback(str(tmp_git_repo)),
+        ) as client:
+            result = await client.call_tool(
+                "get_activity_summary",
+                {"since": "1 hour ago", "author": "Nobody Real"},
+            )
+            data = json.loads(result.content[0].text)
+            assert data["total_commits"] == 0

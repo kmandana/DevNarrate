@@ -19,6 +19,7 @@ from devnarrate.git_operations import (
     count_tokens,
     detect_git_platform,
     execute_commit,
+    get_activity_summary,
     get_branch_commits,
     get_branch_diff,
     get_branch_file_stats,
@@ -536,3 +537,129 @@ class TestStageFiles:
         stage_files(str(tmp_git_repo), ["toggle.py"])
         stats = get_file_stats(str(tmp_git_repo))
         assert any(f["path"] == "toggle.py" for f in stats["files"])
+
+
+# ──────────────────────────────────
+# Tests for get_activity_summary()
+# ──────────────────────────────────
+
+
+class TestGetActivitySummary:
+    """Tests for the developer activity summary."""
+
+    def test_no_commits_in_range(self, tmp_git_repo):
+        """Far-future since date returns zero commits."""
+        summary = get_activity_summary(str(tmp_git_repo), since="2099-01-01")
+        assert summary["total_commits"] == 0
+        assert summary["commits"] == []
+        assert summary["files_changed"] == []
+
+    def test_finds_recent_commits(self, tmp_git_repo):
+        """Commits made just now appear with since='1 hour ago'."""
+        f = tmp_git_repo / "activity.py"
+        f.write_text("x = 1\n")
+        subprocess.run(
+            ["git", "add", "activity.py"],
+            cwd=tmp_git_repo, capture_output=True, check=True,
+        )
+        subprocess.run(
+            ["git", "commit", "-m", "feat: add activity"],
+            cwd=tmp_git_repo, capture_output=True, check=True,
+        )
+        summary = get_activity_summary(str(tmp_git_repo), since="1 hour ago")
+        assert summary["total_commits"] >= 1
+        messages = [c["message"] for c in summary["commits"]]
+        assert "feat: add activity" in messages
+
+    def test_author_me_resolves(self, tmp_git_repo):
+        """author='me' resolves to the configured git user."""
+        summary = get_activity_summary(str(tmp_git_repo), since="1 hour ago", author="me")
+        assert summary["author"] == "Test User"
+
+    def test_author_filter(self, tmp_git_repo):
+        """Filtering by a non-matching author returns no commits."""
+        f = tmp_git_repo / "other.py"
+        f.write_text("y = 2\n")
+        subprocess.run(
+            ["git", "add", "other.py"],
+            cwd=tmp_git_repo, capture_output=True, check=True,
+        )
+        subprocess.run(
+            ["git", "commit", "-m", "feat: other"],
+            cwd=tmp_git_repo, capture_output=True, check=True,
+        )
+        summary = get_activity_summary(
+            str(tmp_git_repo), since="1 hour ago", author="Nonexistent Person"
+        )
+        assert summary["total_commits"] == 0
+
+    def test_files_changed_stats(self, tmp_git_repo):
+        """File change stats include path, added, removed counts."""
+        f = tmp_git_repo / "stats_test.py"
+        f.write_text("a = 1\nb = 2\nc = 3\n")
+        subprocess.run(
+            ["git", "add", "stats_test.py"],
+            cwd=tmp_git_repo, capture_output=True, check=True,
+        )
+        subprocess.run(
+            ["git", "commit", "-m", "feat: add stats test"],
+            cwd=tmp_git_repo, capture_output=True, check=True,
+        )
+        summary = get_activity_summary(str(tmp_git_repo), since="1 hour ago")
+        paths = [f["path"] for f in summary["files_changed"]]
+        assert "stats_test.py" in paths
+        stats_entry = next(f for f in summary["files_changed"] if f["path"] == "stats_test.py")
+        assert stats_entry["added"] == 3
+        assert stats_entry["removed"] == 0
+        assert summary["total_lines_added"] >= 3
+
+    def test_branches_touched(self, tmp_git_repo):
+        """Branches that received commits are listed."""
+        subprocess.run(
+            ["git", "checkout", "-b", "feature/summary-test"],
+            cwd=tmp_git_repo, capture_output=True, check=True,
+        )
+        f = tmp_git_repo / "branch_test.py"
+        f.write_text("z = 99\n")
+        subprocess.run(
+            ["git", "add", "branch_test.py"],
+            cwd=tmp_git_repo, capture_output=True, check=True,
+        )
+        subprocess.run(
+            ["git", "commit", "-m", "feat: branch work"],
+            cwd=tmp_git_repo, capture_output=True, check=True,
+        )
+        summary = get_activity_summary(str(tmp_git_repo), since="1 hour ago")
+        assert summary["total_commits"] >= 1
+        # At least the current branch should be detected
+        assert len(summary["branches_touched"]) >= 1
+
+    def test_multiple_commits_counted(self, tmp_git_repo):
+        """Multiple commits in range are all returned."""
+        for i in range(3):
+            f = tmp_git_repo / f"multi_{i}.py"
+            f.write_text(f"val = {i}\n")
+            subprocess.run(
+                ["git", "add", f"multi_{i}.py"],
+                cwd=tmp_git_repo, capture_output=True, check=True,
+            )
+            subprocess.run(
+                ["git", "commit", "-m", f"feat: multi commit {i}"],
+                cwd=tmp_git_repo, capture_output=True, check=True,
+            )
+        summary = get_activity_summary(str(tmp_git_repo), since="1 hour ago")
+        assert summary["total_commits"] >= 3
+        assert summary["total_files_changed"] >= 3
+
+    def test_response_structure(self, tmp_git_repo):
+        """Response has all required top-level keys."""
+        summary = get_activity_summary(str(tmp_git_repo), since="1 hour ago")
+        assert "author" in summary
+        assert "since" in summary
+        assert "commits" in summary
+        assert "branches_touched" in summary
+        assert "files_changed" in summary
+        assert "total_commits" in summary
+        assert "total_files_changed" in summary
+        assert "total_lines_added" in summary
+        assert "total_lines_removed" in summary
